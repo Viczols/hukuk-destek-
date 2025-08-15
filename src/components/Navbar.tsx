@@ -13,7 +13,6 @@ import RegisterForm from "./RegisterForm";
 import PurchaseHistoryModal from "./PurchaseHistoryModal";
 
 type Props = {
-  // Satın alma geçmişinden “Sohbeti Başlat” gelince yukarı bildireceğiz
   onStartChatFromHistory?: (purchaseId: string) => void;
 };
 
@@ -21,31 +20,27 @@ export default function Navbar({ onStartChatFromHistory }: Props) {
   const [modalType, setModalType] = useState<null | "login" | "register">(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
-
-  // ➜ Eklendi: Lawyer rolü için yerel state
   const [isLawyer, setIsLawyer] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setUserEmail(user.email ?? null);
-
         try {
           const userDoc = await getDoc(doc(getFirestore(), "users", user.uid));
           const role = userDoc.exists() ? userDoc.data().role : undefined;
-
           if (role === "lawyer") {
-            setIsLawyer(true); // ➜ Eklendi
+            setIsLawyer(true);
             setLawyerOnline(user.uid, user.email || "");
           } else {
-            setIsLawyer(false); // ➜ Eklendi
+            setIsLawyer(false);
           }
         } catch {
-          setIsLawyer(false); // ➜ Eklendi (hata durumunda gizle)
+          setIsLawyer(false);
         }
       } else {
         setUserEmail(null);
-        setIsLawyer(false); // ➜ Eklendi
+        setIsLawyer(false);
       }
     });
     return () => unsubscribe();
@@ -63,58 +58,58 @@ export default function Navbar({ onStartChatFromHistory }: Props) {
       }
     }
     await logoutUser();
-    setIsLawyer(false); // ➜ Eklendi: çıkışta da gizle
+    setIsLawyer(false);
     setModalType(null);
   };
 
   return (
-    <header className="bg-white shadow sticky top-0 z-50">
-      <div className="max-w-6xl mx-auto px-4 py-4 flex justify-between items-center">
-        <a href="/" className="text-2xl font-bold text-blue-700">
+    <header className="sticky top-0 z-50 bg-white/70 backdrop-blur border-b border-zinc-200">
+      <div className="max-w-6xl mx-auto px-4 h-16 flex justify-between items-center">
+        <a href="/" className="text-xl font-semibold tracking-tight text-zinc-900">
           HukukDestek
         </a>
 
-        <nav className="space-x-4 text-sm flex items-center">
-          <a href="#paketler" className="text-blue-600 hover:underline">Paketler</a>
-          <a href="#sss" className="text-blue-600 hover:underline">Sıkça Sorulan Sorular</a>
+        <nav className="hidden md:flex items-center gap-2 text-sm">
+          <a href="#paketler" className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors">
+            Paketler
+          </a>
+          <a href="#sss" className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors">
+            SSS
+          </a>
 
-          {/* ➜ Eklendi: Sadece lawyer'a Panel linki */}
           {isLawyer && (
-            <a
-              href="/panel"
-              className="text-blue-600 hover:underline"
-            >
+            <a href="/panel" className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors">
               Panel
             </a>
           )}
 
           {userEmail ? (
             <>
-              <span className="text-gray-800">👤 {userEmail}</span>
               <button
                 onClick={() => setShowHistoryModal(true)}
-                className="text-blue-600 hover:underline"
+                className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
               >
                 Satın Alma Geçmişi
               </button>
+              <span className="px-3 py-2 text-zinc-700 hidden lg:inline">{userEmail}</span>
               <button
                 onClick={handleLogout}
-                className="bg-red-500 text-white px-4 py-1 rounded hover:bg-red-600 transition"
+                className="px-4 py-2 rounded-full bg-zinc-900 text-white hover:bg-zinc-700 transition-colors"
               >
-                Çıkış Yap
+                Çıkış
               </button>
             </>
           ) : (
             <>
               <button
                 onClick={() => setModalType("login")}
-                className="text-blue-600 hover:underline"
+                className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
               >
                 Giriş
               </button>
               <button
                 onClick={() => setModalType("register")}
-                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition"
+                className="px-4 py-2 rounded-full bg-zinc-900 text-white hover:bg-zinc-700 transition-colors"
               >
                 Kayıt Ol
               </button>
@@ -123,6 +118,7 @@ export default function Navbar({ onStartChatFromHistory }: Props) {
         </nav>
       </div>
 
+      {/* Auth modalları */}
       <Modal isOpen={modalType !== null} onClose={closeModal}>
         {modalType === "login" && (
           <LoginForm
@@ -138,12 +134,12 @@ export default function Navbar({ onStartChatFromHistory }: Props) {
         )}
       </Modal>
 
-      {/* Satın Alma Geçmişi modalı (Navbar kontrol ediyor) */}
+      {/* Satın Alma Geçmişi modalı */}
       <PurchaseHistoryModal
         isOpen={showHistoryModal}
         onClose={() => setShowHistoryModal(false)}
         onStartChat={(pid) => {
-          onStartChatFromHistory?.(pid); // ➜ sayfaya haber ver
+          onStartChatFromHistory?.(pid);
         }}
       />
     </header>

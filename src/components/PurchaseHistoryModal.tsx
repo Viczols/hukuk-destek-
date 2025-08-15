@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import Modal from "./Modal";
 import { auth } from "../firebase/config";
 import { getFirestore, collection, query, where, getDocs, orderBy } from "firebase/firestore";
@@ -10,7 +10,7 @@ import { dbRealtime } from "../firebase/config";
 interface Props {
   isOpen: boolean;
   onClose: () => void;
-  // ✅ yeni: geçmişten “Sohbeti Başlat” tıklanınca dışarı bildirmek için
+  // ✅ geçmişten “Sohbeti Başlat” tıklanınca parent’a bildirmek için
   onStartChat?: (purchaseId: string) => void;
 }
 
@@ -20,12 +20,20 @@ interface Purchase {
   status: string;
   createdAt: number;
   productType?: string;
+  // 👇 opsiyonel alanlar (eğer Firestore'a yazıyorsak)
+  storagePath?: string;
+  downloadUrl?: string;
 }
 
 export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: Props) {
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [formattedDates, setFormattedDates] = useState<Record<string, string>>({});
   const [onlineLawyerCount, setOnlineLawyerCount] = useState(0);
+
+  // 🔽 PDF Yükleme için
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [pendingUploadId, setPendingUploadId] = useState<string | null>(null);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
 
   useEffect(() => {
     const lawyersRef = ref(dbRealtime, "lawyers");
@@ -60,7 +68,9 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
         type: doc.data().productKey || doc.data().type || "dilekce",
         status: doc.data().status || "completed",
         createdAt: doc.data().date?.toDate().getTime() || 0,
-        productType: doc.data().productType || ""
+        productType: doc.data().productType || "",
+        storagePath: doc.data().storagePath || "",
+        downloadUrl: doc.data().downloadUrl || "",
       }));
 
       setPurchases(list);
@@ -84,19 +94,86 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
       alert("Şu anda çevrim içi uzman bulunmamaktadır. Hafta içi 09:00 - 18:00 arasında tekrar deneyin.");
       return;
     }
-    // ✅ parent’a bildir ve modalı kapat
     onStartChat?.(purchaseId);
     onClose();
   };
 
-  const handleGeneratePetition = (purchaseId: string) => {
-    alert(`AI destekli dilekçe oluşturuluyor... (purchaseId: ${purchaseId})`);
-  };
+  // ====== PDF YÜKLEME ======
+  function openFileDialog(purchaseId: string) {
+    setPendingUploadId(purchaseId);
+    fileInputRef.current?.click();
+  }
+
+  async function handleFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Sadece PDF kabul et
+    if (file.type !== "application/pdf") {
+      alert("Lütfen PDF dosyası seçin.");
+      e.target.value = "";
+      return;
+    }
+
+    const purchaseId = pendingUploadId;
+    if (!purchaseId) {
+      alert("Sipariş numarası bulunamadı.");
+      e.target.value = "";
+      return;
+    }
+
+    try {
+      setUploadingId(purchaseId);
+
+      // FormData → API'ye gönder
+      const fd = new FormData();
+      fd.append("purchaseId", purchaseId);
+      fd.append("file", file); // Sunucu dosyayı `petitions/<purchaseId>.pdf` olarak kaydedecek
+
+      const res = await fetch("/api/upload-petition", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Yükleme başarısız");
+
+      // Yerel state’i güncelle (durumu completed yap + varsa linki ekle)
+      setPurchases((prev) =>
+        prev.map((p) =>
+          p.id === purchaseId
+            ? {
+                ...p,
+                status: "completed",
+                storagePath: data.storagePath || p.storagePath,
+                downloadUrl: data.downloadUrl || p.downloadUrl,
+              }
+            : p
+        )
+      );
+
+      alert("PDF başarıyla yüklendi.");
+    } catch (err: any) {
+      console.error("[uploadPdf] error:", err);
+      alert(`PDF yüklenemedi: ${err?.message || "bilinmeyen hata"}`);
+    } finally {
+      setUploadingId(null);
+      setPendingUploadId(null);
+      // Aynı dosyayı tekrar seçebilmek için input’u sıfırla
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+  // ==========================
 
   const enableScroll = purchases.length > 10;
 
   return (
     <Modal isOpen={isOpen} onClose={onClose}>
+      {/* gizli file input (tek tane) */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/pdf"
+        className="hidden"
+        onChange={handleFileSelected}
+      />
+
       <div className="p-4">
         <h2 className="text-xl font-bold text-blue-700 mb-4 text-center">
           Satın Alma Geçmişiniz
@@ -125,23 +202,47 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
                       Durum: {p.status} <br />
                       Tarih: {formattedDates[p.id] || ""}
                     </p>
+                    
+                    {p.status === "completed" && p.downloadUrl && (
+                      <a href={p.downloadUrl} target="_blank" rel="noopener" className="text-blue-600 underline text-sm">
+                        PDF indir
+                      </a>
+                    )}
                   </div>
 
                   {p.status === "pending" && (
                     <>
                       {p.type === "dilekce" && (
-                        <button
-                          onClick={() => handleGeneratePetition(p.id)}
-                          className="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 transition text-sm"
-                        >
-                          📄 Dilekçe Yazdır
-                        </button>
+                        // ✔ Tasarımı bozmamak için iki butonu yan yana, aynı sınıflarla tuttum
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => alert(`AI destekli dilekçe oluşturuluyor... (purchaseId: ${p.id})`)}
+                            className="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 transition text-sm"
+                          >
+                            📄 Dilekçe Yazdır
+                          </button>
+
+                          <button
+                            onClick={() => openFileDialog(p.id)}
+                            disabled={uploadingId === p.id}
+                            className={`${uploadingId === p.id ? "bg-gray-400 cursor-wait" : "bg-blue-600 hover:bg-blue-700"} text-white px-3 py-1 rounded transition text-sm`}
+                          >
+                            {uploadingId === p.id ? "Yükleniyor..." : "⬆️ PDF Yükle"}
+                          </button>
+                        </div>
                       )}
 
                       {(p.type === "gorusme" || p.type === "uzman") && (
                         <div className="flex flex-col items-end">
                           <button
-                            onClick={() => handleStartChat(p.id)}
+                            onClick={() => {
+                              if (onlineLawyerCount === 0) {
+                                alert("Şu anda çevrim içi uzman bulunmamaktadır. Hafta içi 09:00 - 18:00 arasında tekrar deneyin.");
+                                return;
+                              }
+                              onStartChat?.(p.id);
+                              onClose();
+                            }}
                             disabled={onlineLawyerCount === 0}
                             className={`${onlineLawyerCount === 0
                                 ? "bg-gray-400 cursor-not-allowed"

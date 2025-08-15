@@ -1,6 +1,6 @@
 // src/app/page.tsx
 "use client";
-
+import Head from "next/head";
 import Navbar from "../components/Navbar";
 import Hero from "../components/Hero";
 import Packages from "../components/Packages";
@@ -9,7 +9,6 @@ import FAQ from "../components/FAQ";
 import ChatButton from "../components/ChatButton";
 import ChatBox from "../components/ChatBox";
 import PurchaseSuccessModal from "../components/PurchaseSuccessModal";
-
 import { useEffect, useState } from "react";
 import { dbRealtime, auth } from "../firebase/config";
 import { ref, onValue } from "firebase/database";
@@ -111,39 +110,43 @@ export default function Anasayfa() {
     setChatOpen(true);
   };
 
-  return (
+return (
     <main>
-      <Navbar onStartChatFromHistory={handleStartChatFromHistory} />
+      {/* Google Font */}
+      <Head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+          rel="stylesheet"
+        />
+      </Head>
+
+      {/* Opsiyonel kök: Modal.tsx yoksa body'ye taşır; varsa buraya render eder */}
+      <div id="modal-root" />
+
+      <Navbar /* onStartChatFromHistory vs. mevcut prop'ların aynen kalsın */ />
 
       <Hero />
       <Packages />
       <FAQ />
       <Footer />
 
-      <PurchaseSuccessModal
-        isOpen={showSuccessModal}
-        onClose={() => setShowSuccessModal(false)}
-        type={successType}
-        onlineLawyers={onlineLawyers}
-      />
+      {/* PurchaseSuccessModal + Chat parçaların aynı kalsın */}
 
-      {activePurchaseId && (
-        <>
-          <ChatButton
-            onClick={() => setChatOpen(true)}
-            expertOnline={onlineLawyers > 0}
-          />
-          {chatOpen && (
-            <ChatBox
-              onClose={() => setChatOpen(false)}
-              expertName="Uzman"
-              expertOnline={onlineLawyers > 0}
-              purchaseId={activePurchaseId}
-              userId={uid || ""}
-            />
-          )}
-        </>
-      )}
+      {/* Global tipografi ve smooth scroll */}
+      <style jsx global>{`
+        html { scroll-behavior: smooth; }
+        body {
+          font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+          font-size: 15.5px; /* bir tık büyüttüm */
+          color: #0a0a0a;
+        }
+        h1 { font-size: clamp(2rem, 3.5vw, 2.75rem); line-height: 1.15; font-weight: 700; letter-spacing: -0.01em; }
+        h2 { font-size: clamp(1.5rem, 2.5vw, 2rem); line-height: 1.2;  font-weight: 600; letter-spacing: -0.005em; }
+        p  { line-height: 1.7; }
+        button { font-weight: 600; }
+      `}</style>
     </main>
   );
 }

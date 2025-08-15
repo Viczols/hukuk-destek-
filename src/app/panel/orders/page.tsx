@@ -37,7 +37,7 @@ export default function OrdersPage() {
   // upload UI state
   const [selectedFiles, setSelectedFiles] = useState<Record<string, File | null>>({});
   const [inputKey, setInputKey] = useState<Record<string, number>>({});
-  const [uploadPct, setUploadPct] = useState<Record<string, number>>({}); // sadece “indeterminate” için 0→100 simülasyonu
+  const [uploadPct, setUploadPct] = useState<Record<string, number>>({}); // görsel amaçlı
 
   // email cache
   const emailCacheRef = useRef<Map<string, string | null>>(new Map());
@@ -48,10 +48,12 @@ export default function OrdersPage() {
 
   useEffect(() => {
     let stopAuth = () => {};
-    let unsubPurchases = () => {};
+    let unsubPurchasesActive = () => {};
+    let unsubPurchasesCompleted = () => {};
     let unsubTickets = () => {};
 
     stopAuth = onAuthStateChanged(auth, (u) => {
+      // reset
       for (const unsub of ticketPurchaseUnsubsRef.current.values()) unsub();
       ticketPurchaseUnsubsRef.current.clear();
       mergedMapRef.current.clear();
@@ -59,14 +61,14 @@ export default function OrdersPage() {
 
       if (!u) return;
 
-      // 1) purchases → assignedLawyerId == uid + aktif
-      const q1 = query(
+      // 1) Aktif siparişler: assignedLawyerId==uid ve status in (pending, in_progress)
+      const qActive = query(
         collection(db, "purchases"),
         where("assignedLawyerId", "==", u.uid),
         where("status", "in", ["pending", "in_progress"])
       );
-      unsubPurchases = onSnapshot(
-        q1,
+      unsubPurchasesActive = onSnapshot(
+        qActive,
         (snap) => {
           const map = mergedMapRef.current;
           snap.forEach((d) => {
@@ -84,18 +86,49 @@ export default function OrdersPage() {
             };
             map.set(p.id, p);
           });
-          setOrders(sortForUI(Array.from(map.values())));
+          setOrders(sortAll(Array.from(map.values())));
           warmEmails(Array.from(mergedMapRef.current.values()));
         },
-        (err) => console.error("[orders] purchases primary query error:", err)
+        (err) => console.error("[orders] purchases active query error:", err)
       );
 
-      // 2) chatTickets fallback — istersen Rules ekleyip aç, yoksa yoruma al
+      // 2) Tamamlanmış siparişler: assignedLawyerId==uid ve status == completed
+      const qCompleted = query(
+        collection(db, "purchases"),
+        where("assignedLawyerId", "==", u.uid),
+        where("status", "==", "completed")
+      );
+      unsubPurchasesCompleted = onSnapshot(
+        qCompleted,
+        (snap) => {
+          const map = mergedMapRef.current;
+          snap.forEach((d) => {
+            const data = d.data() as DocumentData;
+            const p: Purchase = {
+              id: d.id,
+              userId: data.userId,
+              productType: data.productType ?? "",
+              status: data.status ?? "",
+              assignedLawyerId: data.assignedLawyerId ?? null,
+              deliveredPdfUrl: data.deliveredPdfUrl ?? null,
+              userEmail: data.userEmail ?? null,
+              createdAt: data.createdAt ?? null,
+              chatId: data.chatId ?? null,
+            };
+            map.set(p.id, p);
+          });
+          setOrders(sortAll(Array.from(map.values())));
+          warmEmails(Array.from(mergedMapRef.current.values()));
+        },
+        (err) => console.error("[orders] purchases completed query error:", err)
+      );
+
+      // 3) chatTickets fallback — gerekirse aç
       const ENABLE_TICKETS_FALLBACK = true;
       if (ENABLE_TICKETS_FALLBACK) {
-        const q2 = query(collection(db, "chatTickets"), where("assignedLawyer", "==", u.uid));
+        const qTickets = query(collection(db, "chatTickets"), where("assignedLawyer", "==", u.uid));
         unsubTickets = onSnapshot(
-          q2,
+          qTickets,
           (snap) => {
             const nextTicketIds = new Set<string>();
             snap.forEach((d) => {
@@ -103,6 +136,7 @@ export default function OrdersPage() {
               if (purchaseId) nextTicketIds.add(purchaseId);
             });
 
+            // kaldırılanların aboneliklerini temizle
             for (const [pid, unsub] of ticketPurchaseUnsubsRef.current) {
               if (!nextTicketIds.has(pid)) {
                 unsub();
@@ -110,6 +144,7 @@ export default function OrdersPage() {
               }
             }
 
+            // yeni ticket id’leri için purchases/<pid> dinle
             for (const pid of nextTicketIds) {
               if (ticketPurchaseUnsubsRef.current.has(pid)) continue;
 
@@ -119,11 +154,7 @@ export default function OrdersPage() {
                   if (!pd.exists()) return;
                   const data = pd.data() as any;
 
-                  if (!ACTIVE_SET.has(data.status)) {
-                    mergedMapRef.current.delete(pid);
-                    setOrders(sortForUI(Array.from(mergedMapRef.current.values())));
-                    return;
-                  }
+                  // completed olanları da koruyoruz
                   const p: Purchase = {
                     id: pd.id,
                     userId: data.userId,
@@ -136,7 +167,7 @@ export default function OrdersPage() {
                     chatId: data.chatId ?? null,
                   };
                   mergedMapRef.current.set(pid, p);
-                  setOrders(sortForUI(Array.from(mergedMapRef.current.values())));
+                  setOrders(sortAll(Array.from(mergedMapRef.current.values())));
                   warmEmails([p]);
                 },
                 (err) => console.error("[orders] purchase-by-ticket listen error:", err)
@@ -150,7 +181,8 @@ export default function OrdersPage() {
     });
 
     return () => {
-      unsubPurchases();
+      unsubPurchasesActive();
+      unsubPurchasesCompleted();
       unsubTickets();
       for (const unsub of ticketPurchaseUnsubsRef.current.values()) unsub();
       ticketPurchaseUnsubsRef.current.clear();
@@ -158,16 +190,17 @@ export default function OrdersPage() {
     };
   }, []);
 
-  const sortForUI = (arr: Purchase[]) => {
+  // Tüm siparişlerde sıralama (önce aktifler, sonra createdAt ile)
+  const sortAll = (arr: Purchase[]) => {
     const rank: Record<string, number> = { in_progress: 0, pending: 1, completed: 2 };
     return arr
-      .filter((x) => ACTIVE_SET.has(x.status))
+      .slice()
       .sort((a, b) => {
         const r = (rank[a.status] ?? 9) - (rank[b.status] ?? 9);
         if (r !== 0) return r;
         const at = (a as any).createdAt?.toMillis?.() ?? 0;
         const bt = (b as any).createdAt?.toMillis?.() ?? 0;
-        if (at !== bt) return bt - at;
+        if (at !== bt) return bt - at; // yeni üstte
         return a.id.localeCompare(b.id);
       });
   };
@@ -193,7 +226,7 @@ export default function OrdersPage() {
     setInputKey((k) => ({ ...k, [pid]: (k[pid] ?? 0) + 1 }));
   };
 
-  // 🔁 YENİ: Sunucuya (API route) yükleyen sürüm — CORS gerektirmez
+  // API route'a yükleme — CORS yok
   const uploadPdf = async (p: Purchase) => {
     const file = selectedFiles[p.id];
     if (!file) return alert("Yüklenecek PDF seçilmedi.");
@@ -204,7 +237,7 @@ export default function OrdersPage() {
     if (!user) return alert("Oturum bulunamadı.");
 
     setBusyId(p.id);
-    setUploadPct((s) => ({ ...s, [p.id]: 10 })); // indeterminate gösterim
+    setUploadPct((s) => ({ ...s, [p.id]: 10 }));
 
     try {
       const idToken = await user.getIdToken();
@@ -222,8 +255,7 @@ export default function OrdersPage() {
         const j = await res.json().catch(() => ({} as any));
         throw new Error(j?.error || `Upload failed: ${res.status}`);
       }
-      const j = await res.json();
-      // deliveredPdfUrl server tarafında yazıldı; client’ta beklemeye gerek yok
+      await res.json();
       setUploadPct((s) => ({ ...s, [p.id]: 100 }));
       onFileSelect(p.id, null);
       alert("PDF yüklendi. Artık 'Siparişi Tamamla' aktif.");
@@ -257,10 +289,7 @@ export default function OrdersPage() {
   };
 
   const resendMail = async (p: Purchase) => {
-    const email =
-      p.userEmail ??
-      emailCacheRef.current.get(p.userId) ??
-      null;
+    const email = p.userEmail ?? emailCacheRef.current.get(p.userId) ?? null;
     if (!email) return alert("E-posta bulunamadı.");
     if (!p.deliveredPdfUrl) return alert("PDF yüklenmemiş.");
 
@@ -285,14 +314,24 @@ export default function OrdersPage() {
     }
   };
 
-  const list = useMemo(() => orders, [orders]);
+  // Bölümler
+  const activeList = useMemo(() => orders.filter((o) => ACTIVE_SET.has(o.status)), [orders]);
+  const completedList = useMemo(() => orders.filter((o) => o.status === "completed"), [orders]);
 
   return (
     <div className="mx-auto max-w-5xl p-4">
-      <h1 className="mb-4 text-2xl font-semibold">Orders (Assigned)</h1>
+      <h1 className="mb-4 text-2xl font-semibold">Siparişler (Atanmış)</h1>
 
+      {/* === Aktif Siparişler === */}
+      <SectionTitle
+        title="Aktif Siparişler"
+        count={activeList.length}
+        subtitle="Bekleyen ve devam eden siparişler"
+      />
       <div className="grid gap-4">
-        {list.map((o) => {
+        {activeList.length === 0 && <EmptyCard text="Atanmış aktif sipariş bulunamadı." />}
+
+        {activeList.map((o) => {
           const hasPdf = !!o.deliveredPdfUrl;
           const file = selectedFiles[o.id] ?? null;
           const pct = uploadPct[o.id] ?? 0;
@@ -302,10 +341,7 @@ export default function OrdersPage() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-[240px]">
                   <div className="font-medium">
-                    {o.productType || "Ürün"}{" "}
-                    <span className="ml-2 rounded bg-gray-100 px-2 py-0.5 text-xs">
-                      {o.status}
-                    </span>
+                    {o.productType || "Ürün"} <StatusBadge status={o.status} />
                   </div>
                   <div className="text-xs text-gray-600">ID: {o.id}</div>
                   <div className="text-xs text-gray-600">
@@ -331,9 +367,9 @@ export default function OrdersPage() {
                       className={`cursor-pointer rounded-lg border px-3 py-2 text-sm ${
                         busyId === o.id ? "opacity-50 pointer-events-none" : "hover:bg-gray-50"
                       }`}
-                      title="PDF seç"
+                      title={hasPdf ? "Yeni PDF seçerek mevcut dosyayı değiştir" : "PDF seç"}
                     >
-                      PDF Seç
+                      {hasPdf ? "PDF’yi Değiştir" : "PDF Seç"}
                     </label>
 
                     {file ? (
@@ -343,7 +379,7 @@ export default function OrdersPage() {
                         </span>
                         <button
                           onClick={() => onFileSelect(o.id, null)}
-                          className="rounded-md border px-2 py-1 text-xs"
+                          className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
                           disabled={busyId === o.id}
                           title="Seçimi temizle"
                         >
@@ -352,7 +388,7 @@ export default function OrdersPage() {
                         <button
                           onClick={() => uploadPdf(o)}
                           disabled={busyId === o.id}
-                          className="rounded-md bg-black px-3 py-2 text-white text-sm"
+                          className="rounded-md bg-black px-3 py-2 text-white text-sm hover:bg-gray-800"
                           title="PDF’i yükle"
                         >
                           Yükle
@@ -374,9 +410,9 @@ export default function OrdersPage() {
                     )}
                   </div>
 
-                  {/* Basit ilerleme (indeterminate) */}
+                  {/* Basit ilerleme */}
                   {busyId === o.id && (
-                    <div className="mt-2 h-2 w-full rounded bg-gray-200 overflow-hidden">
+                    <div className="mt-2 h-2 w-full overflow-hidden rounded bg-gray-200">
                       <div
                         className="h-2 rounded bg-black animate-pulse"
                         style={{ width: pct ? `${pct}%` : "100%" }}
@@ -401,7 +437,7 @@ export default function OrdersPage() {
                       <button
                         onClick={() => resendMail(o)}
                         disabled={busyId === o.id}
-                        className="rounded-lg px-3 py-2 border text-sm"
+                        className="rounded-lg px-3 py-2 border text-sm hover:bg-gray-50 transition"
                         title="PDF linkini kullanıcıya tekrar e-posta ile gönder"
                       >
                         Yeniden Mail Gönder
@@ -415,19 +451,175 @@ export default function OrdersPage() {
         })}
       </div>
 
+      {/* === Tamamlanmış Siparişler === */}
+      <SectionTitle
+        title="Tamamlanmış Siparişler"
+        count={completedList.length}
+        subtitle="Yalnızca size atanmış tamamlanmış siparişler"
+        className="mt-10"
+      />
+      <div className="grid gap-4">
+        {completedList.length === 0 && <EmptyCard text="Tamamlanmış sipariş bulunamadı." />}
+
+        {completedList.map((o) => {
+          const file = selectedFiles[o.id] ?? null;
+          const pct = uploadPct[o.id] ?? 0;
+
+          return (
+            <div key={o.id} className="rounded-xl border p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-[240px]">
+                  <div className="font-medium">
+                    {o.productType || "Ürün"} <StatusBadge status={o.status} />
+                  </div>
+                  <div className="text-xs text-gray-600">ID: {o.id}</div>
+                  <div className="text-xs text-gray-600">
+                    Kullanıcı: {maskEmail(o.userEmail ?? emailCacheRef.current.get(o.userId) ?? null)}
+                  </div>
+                  {o.chatId && <div className="text-xs text-gray-600">Sohbet: {o.chatId}</div>}
+                </div>
+
+                <div className="flex-1">
+                  <div className="flex flex-wrap items-center gap-3">
+                    {/* Gizli dosya inputu */}
+                    <input
+                      key={inputKey[o.id] ?? 0}
+                      id={`c-file-${o.id}`}
+                      type="file"
+                      accept="application/pdf"
+                      disabled={busyId === o.id}
+                      onChange={(e) => onFileSelect(o.id, e.target.files?.[0] ?? null)}
+                      className="hidden"
+                    />
+
+                    {/* Seçme label’ı (PDF varsa “PDF’yi Değiştir” olarak göster) */}
+                    <label
+                      htmlFor={`c-file-${o.id}`}
+                      className={`cursor-pointer rounded-lg border px-3 py-2 text-sm ${
+                        busyId === o.id ? "opacity-50 pointer-events-none" : "hover:bg-gray-50"
+                      }`}
+                      title={o.deliveredPdfUrl ? "Yeni PDF seçerek mevcut dosyayı değiştir" : "PDF seç"}
+                    >
+                      {selectedFiles[o.id]
+                        ? "Farklı PDF Seç"
+                        : o.deliveredPdfUrl
+                        ? "PDF’yi Değiştir"
+                        : "PDF Seç"}
+                    </label>
+
+                    {/* Seçim yapıldıysa Yükle/Kaldır; değilse PDF’i Aç + Yeniden Mail Gönder */}
+                    {selectedFiles[o.id] ? (
+                      <>
+                        <span className="text-xs text-gray-700">
+                          Seçilen: <b>{selectedFiles[o.id]!.name}</b> (
+                          {Math.round((selectedFiles[o.id]!.size || 0) / 1024)} KB)
+                        </span>
+                        <button
+                          onClick={() => onFileSelect(o.id, null)}
+                          className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
+                          disabled={busyId === o.id}
+                          title="Seçimi temizle"
+                        >
+                          Kaldır
+                        </button>
+                        <button
+                          onClick={() => uploadPdf(o)}
+                          disabled={busyId === o.id}
+                          className="rounded-md bg-black px-3 py-2 text-white text-sm hover:bg-gray-800"
+                          title="Yeni PDF’i yükle (mevcudun üzerine yazar)"
+                        >
+                          Yükle
+                        </button>
+                      </>
+                    ) : o.deliveredPdfUrl ? (
+                      <>
+                        <a
+                          href={o.deliveredPdfUrl}
+                          target="_blank"
+                          className="rounded-lg border px-3 py-2 text-sm hover:bg-gray-50"
+                          title="PDF’i aç"
+                        >
+                          PDF’i Aç
+                        </a>
+                        <button
+                          onClick={() => resendMail(o)}
+                          className="rounded-lg px-3 py-2 border text-sm hover:bg-gray-50 transition"
+                          title="PDF linkini kullanıcıya tekrar e-posta ile gönder"
+                        >
+                          Yeniden Mail Gönder
+                        </button>
+                      </>
+                    ) : (
+                      <span className="text-xs text-gray-500">PDF bulunamadı.</span>
+                    )}
+                  </div>
+
+                  {/* Yükleme ilerleme çubuğu (tamamlanmışta da gösterebiliriz) */}
+                  {busyId === o.id && (
+                    <div className="mt-2 h-2 w-full overflow-hidden rounded bg-gray-200">
+                      <div
+                        className="h-2 rounded bg-black animate-pulse"
+                        style={{ width: pct ? `${pct}%` : "100%" }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
       {orders.length === 0 && (
-        <div className="rounded-lg border p-6 text-center text-gray-600 mt-6">
-          Avukata atanmış aktif sipariş bulunamadı.
+        <div className="mt-6 rounded-lg border p-6 text-center text-gray-600">
+          Size atanmış sipariş bulunamadı.
         </div>
       )}
     </div>
   );
 }
 
+/* ============ Küçük UI yardımcıları ============ */
+
+function SectionTitle({
+  title,
+  count,
+  subtitle,
+  className = "",
+}: {
+  title: string;
+  count: number;
+  subtitle?: string;
+  className?: string;
+}) {
+  return (
+    <div className={`mb-3 flex items-center gap-2 ${className}`}>
+      <h2 className="text-lg font-semibold">{title}</h2>
+      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-600">{count}</span>
+      {subtitle && <span className="text-xs text-gray-500">• {subtitle}</span>}
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    pending: { label: "Bekliyor", cls: "bg-yellow-100 text-yellow-800" },
+    in_progress: { label: "Devam Ediyor", cls: "bg-blue-100 text-blue-800" },
+    completed: { label: "Tamamlandı", cls: "bg-green-100 text-green-800" },
+  };
+  const v = map[status] ?? { label: status, cls: "bg-gray-100 text-gray-700" };
+  return <span className={`ml-2 rounded px-2 py-0.5 text-xs ${v.cls}`}>{v.label}</span>;
+}
+
+function EmptyCard({ text }: { text: string }) {
+  return <div className="rounded-lg border p-4 text-sm text-gray-500">{text}</div>;
+}
+
 function maskEmail(email?: string | null) {
   if (!email) return "bilinmiyor";
   const [local, domain = ""] = email.split("@");
-  const ml = local.length <= 2 ? local[0] + "*" : local.slice(0, 2) + "*".repeat(Math.max(1, local.length - 2));
+  const ml =
+    local.length <= 2 ? local[0] + "*" : local.slice(0, 2) + "*".repeat(Math.max(1, local.length - 2));
   const [dom, tld = ""] = domain.split(".");
   const md = dom.length <= 1 ? dom + "*" : dom.slice(0, 1) + "*".repeat(Math.max(1, dom.length - 1));
   return `${ml}@${md}${tld ? "." + tld : ""}`;
