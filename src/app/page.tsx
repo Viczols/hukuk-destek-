@@ -1,6 +1,6 @@
 // src/app/page.tsx
 "use client";
-import Head from "next/head";
+
 import Navbar from "../components/Navbar";
 import Hero from "../components/Hero";
 import Packages from "../components/Packages";
@@ -9,6 +9,10 @@ import FAQ from "../components/FAQ";
 import ChatButton from "../components/ChatButton";
 import ChatBox from "../components/ChatBox";
 import PurchaseSuccessModal from "../components/PurchaseSuccessModal";
+
+// YENİ: Blog bileşeni
+import BlogSection from "../components/BlogSection";
+
 import { useEffect, useState } from "react";
 import { dbRealtime, auth } from "../firebase/config";
 import { ref, onValue } from "firebase/database";
@@ -23,6 +27,7 @@ export default function Anasayfa() {
   const [uid, setUid] = useState<string | null>(null);
   const [activePurchaseId, setActivePurchaseId] = useState<string | null>(null);
 
+  // Satın alma başarılıysa bir kere göster
   useEffect(() => {
     try {
       const stored = typeof window !== "undefined" ? localStorage.getItem("purchaseSuccess") : null;
@@ -37,6 +42,7 @@ export default function Anasayfa() {
     } catch {}
   }, []);
 
+  // auth → uid
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
       setUid(user?.uid ?? null);
@@ -44,37 +50,47 @@ export default function Anasayfa() {
     return () => unsub();
   }, []);
 
+  // online avukat sayısı (realtime)
   useEffect(() => {
     const lawyersRef = ref(dbRealtime, "lawyers");
-    const unsubscribe = onValue(lawyersRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        const count = Object.values(data).filter(
-          (lawyer: any) => lawyer?.isOnline === true || lawyer?.online === true
-        ).length;
-        setOnlineLawyers(count);
-      } else {
-        setOnlineLawyers(0);
-      }
-    }, () => setOnlineLawyers(0));
+    const unsubscribe = onValue(
+      lawyersRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          const count = Object.values(data).filter(
+            (lawyer: any) => lawyer?.isOnline === true || lawyer?.online === true
+          ).length;
+          setOnlineLawyers(count);
+        } else {
+          setOnlineLawyers(0);
+        }
+      },
+      () => setOnlineLawyers(0)
+    );
     return () => unsubscribe();
   }, []);
 
+  // (opsiyonel) purchases query (log için bırakılmış)
   useEffect(() => {
     if (!uid) return;
     (async () => {
       try {
         const db = getFirestore();
-        const snap = await getDocs(query(collection(db, "purchases"), where("userId", "==", uid)));
-        // debug loglar isteğe bağlı
+        await getDocs(query(collection(db, "purchases"), where("userId", "==", uid)));
       } catch {}
     })();
   }, [uid]);
 
+  // pending/active satın alma → chat açma için id
   useEffect(() => {
     const run = async () => {
-      if (!uid) { setActivePurchaseId(null); return; }
+      if (!uid) {
+        setActivePurchaseId(null);
+        return;
+      }
       const db = getFirestore();
+
       const fetchByStatus = async (statusVal: "pending" | "active") => {
         try {
           const qRef = query(
@@ -84,6 +100,7 @@ export default function Anasayfa() {
           );
           const snap = await getDocs(qRef);
           if (snap.empty) return null;
+
           const wanted = new Set(["gorusme", "uzman"]);
           const docs = snap.docs
             .map((d) => {
@@ -94,9 +111,13 @@ export default function Anasayfa() {
             })
             .filter((x) => wanted.has(x.t))
             .sort((a, b) => b.ts - a.ts);
+
           return docs[0]?.id ?? null;
-        } catch { return null; }
+        } catch {
+          return null;
+        }
       };
+
       let pid = await fetchByStatus("pending");
       if (!pid) pid = await fetchByStatus("active");
       setActivePurchaseId(pid ?? null);
@@ -104,49 +125,80 @@ export default function Anasayfa() {
     run();
   }, [uid]);
 
-  // Navbar’daki modal “Sohbeti Başlat” dediğinde
+  // Navbar’daki “Sohbeti Başlat” gelince
   const handleStartChatFromHistory = (purchaseId: string) => {
     setActivePurchaseId(purchaseId);
     setChatOpen(true);
   };
 
-return (
+  // YENİ: Blog verisi (şimdilik mock; panel bağlanınca Firestore’dan gelecek)
+  const blogMock = [
+    {
+      id: "1",
+      slug: "is-akdinde-fesih-sureci",
+      title: "İş Akdinde Fesih Süreci: Dikkat Edilmesi Gerekenler",
+      excerpt:
+        "İş akdi fesih sürecinde işveren ve işçinin hakları, süreler ve tazminatlar...",
+      coverUrl: "/images/istockphoto-1328608958-612x612.jpg",
+      tags: ["iş-hukuku", "fesih"],
+      publishedAtText: "2 gün önce",
+    },
+    {
+      id: "2",
+      slug: "kira-uyusmazliklarinda-yeni-yol-haritasi",
+      title: "Kira Uyuşmazlıklarında Yeni Yol Haritası",
+      excerpt:
+        "Arabuluculuk şartı, tahliye davası, kira tespiti ve pratik öneriler...",
+      coverUrl: "/images/ChatGPT Image 15 Ağu 2025 16_18_37.png",
+      tags: ["gayrimenkul", "arabuluculuk"],
+      publishedAtText: "1 hafta önce",
+    },
+    {
+      id: "3",
+      slug: "miras-planlamasi-icin-ipuclari",
+      title: "Miras Planlaması İçin 7 İpucu",
+      excerpt:
+        "Vasiyetname, saklı pay, miras sözleşmesi… Hangi adımlar riski azaltır?",
+      coverUrl: "/images/ChatGPT Image 15 Ağu 2025 16_15_57.png",
+      tags: ["miras", "aile-hukuku"],
+      publishedAtText: "12 gün önce",
+    },
+  ];
+
+  return (
     <main>
-      {/* Google Font */}
-      <Head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
-          rel="stylesheet"
-        />
-      </Head>
-
-      {/* Opsiyonel kök: Modal.tsx yoksa body'ye taşır; varsa buraya render eder */}
-      <div id="modal-root" />
-
-      <Navbar /* onStartChatFromHistory vs. mevcut prop'ların aynen kalsın */ />
+      <Navbar onStartChatFromHistory={handleStartChatFromHistory} />
 
       <Hero />
       <Packages />
+
+      {/* YENİ: Blog – Paketler'in hemen altında */}
+      <BlogSection posts={blogMock} />
+
       <FAQ />
       <Footer />
 
-      {/* PurchaseSuccessModal + Chat parçaların aynı kalsın */}
+      <PurchaseSuccessModal
+        isOpen={showSuccessModal}
+        onClose={() => setShowSuccessModal(false)}
+        type={successType}
+        onlineLawyers={onlineLawyers}
+      />
 
-      {/* Global tipografi ve smooth scroll */}
-      <style jsx global>{`
-        html { scroll-behavior: smooth; }
-        body {
-          font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
-          font-size: 15.5px; /* bir tık büyüttüm */
-          color: #0a0a0a;
-        }
-        h1 { font-size: clamp(2rem, 3.5vw, 2.75rem); line-height: 1.15; font-weight: 700; letter-spacing: -0.01em; }
-        h2 { font-size: clamp(1.5rem, 2.5vw, 2rem); line-height: 1.2;  font-weight: 600; letter-spacing: -0.005em; }
-        p  { line-height: 1.7; }
-        button { font-weight: 600; }
-      `}</style>
+      {activePurchaseId && (
+        <>
+          <ChatButton onClick={() => setChatOpen(true)} expertOnline={onlineLawyers > 0} />
+          {chatOpen && (
+            <ChatBox
+              onClose={() => setChatOpen(false)}
+              expertName="Uzman"
+              expertOnline={onlineLawyers > 0}
+              purchaseId={activePurchaseId}
+              userId={uid || ""}
+            />
+          )}
+        </>
+      )}
     </main>
   );
 }

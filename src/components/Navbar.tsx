@@ -1,4 +1,3 @@
-// src/components/Navbar.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -69,10 +68,17 @@ export default function Navbar({ onStartChatFromHistory }: Props) {
           HukukDestek
         </a>
 
+        {/* NAV */}
         <nav className="hidden md:flex items-center gap-2 text-sm">
           <a href="#paketler" className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors">
             Paketler
           </a>
+
+          {/* YENİ: Blog butonu */}
+          <a href="#blog" className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors">
+            Blog
+          </a>
+
           <a href="#sss" className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors">
             SSS
           </a>
