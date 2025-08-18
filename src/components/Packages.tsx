@@ -15,7 +15,11 @@ export default function Packages() {
   const [noLawyerModal, setNoLawyerModal] = useState(false);
   const [onlineLawyerCount, setOnlineLawyerCount] = useState(0);
 
-  // 🔧 RTDB timestamp'larını güvenli millis'e çevir
+  // UI’de görünen fiyatlar (mevcut ödeme akışınla uyumlu)
+  const dilekcePrice = 152;   // ₺
+  const uzmanPrice   = 2001;  // ₺
+
+  // RTDB timestamp normalize
   const toMillis = (v: any): number => {
     if (typeof v === "number") return v;
     if (v && typeof v.toMillis === "function") return v.toMillis();
@@ -30,11 +34,8 @@ export default function Packages() {
         setOnlineLawyerCount(0);
         return;
       }
-
       const data = snapshot.val() || {};
       const now = Date.now();
-
-      // ✅ isOnline + son 2 dk içinde heartbeat/lastSeen olanları say
       const count = Object.values<any>(data).filter((lawyer: any) => {
         const isOnline = lawyer?.isOnline === true;
         const hb = toMillis(lawyer?.heartbeatAt);
@@ -42,10 +43,8 @@ export default function Packages() {
         const fresh = (now - hb) < 120_000 || (now - ls) < 120_000;
         return isOnline && fresh;
       }).length;
-
       setOnlineLawyerCount(count);
     });
-
     return () => unsubscribe();
   }, []);
 
@@ -93,8 +92,6 @@ export default function Packages() {
       });
 
       const data = await response.json();
-      console.log("create-session yanıtı:", data);
-
       if (data?.paymentPageUrl) {
         window.location.href = data.paymentPageUrl;
       } else {
@@ -106,90 +103,133 @@ export default function Packages() {
     }
   };
 
-  const handleBuyClick = (type: "dilekce" | "uzman") => {
-    setSelectedType(type);
-  };
+  const formatTRY = (n: number) =>
+    new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 }).format(n);
 
   return (
-    <section id="paketler" className="py-16 bg-gray-50">
-      <h2 className="text-3xl font-bold text-center text-blue-800 mb-10">Paketlerimiz</h2>
+    <section
+      id="paketler"
+      className="relative py-16 md:py-20 bg-gradient-to-b from-zinc-950 via-zinc-900 to-zinc-900 text-zinc-100"
+    >
+      {/* Üst/alt yumuşak geçişler (fade) + ince çizgiler */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-10 bg-gradient-to-b from-black/20 to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/20 to-transparent" />
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+      <div className="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
 
-      <div className="max-w-5xl mx-auto grid gap-10 md:grid-cols-2">
-        {/* Yapay Zeka ile Dilekçe Paketi */}
-        <div className="bg-white rounded-lg shadow-lg p-6 flex flex-col justify-between">
-          <div>
-            <h3 className="text-xl font-semibold text-blue-700 mb-2">
-              🤖 Yapay Zeka ile Dilekçe Yazımı
-            </h3>
-            <ul className="text-gray-700 mb-4 space-y-1 list-disc list-inside">
-              <li>AI destekli hızlı dilekçe üretimi</li>
-              <li>5 dakika uzman danışmanlığı</li>
+      <div className="relative max-w-6xl mx-auto px-4">
+        {/* Üst başlık */}
+        <header className="text-center mb-10 md:mb-14">
+          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-white">
+            Uzman Ekip — Net Süreç — Güvenli Ödeme
+          </h2>
+          <p className="mt-2 text-zinc-300">
+            Baroya kayıtlı uzmanlarla, şeffaf fiyat ve iyzico güvencesi.
+          </p>
+        </header>
+
+        {/* Kartlar */}
+        <div className="grid gap-5 sm:grid-cols-2">
+          {/* Dilekçe Kartı */}
+          <article className="group rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-5 hover:bg-white/10 transition shadow-sm h-full flex flex-col">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-xl font-semibold text-white">🤖 Yapay Zeka ile Dilekçe</h3>
+                <p className="text-sm text-zinc-400 mt-1">Hızlı taslak + uzman bakışı</p>
+              </div>
+              {/* Fiyat rozeti */}
+              <span className="rounded-full px-3 py-1 bg-white text-zinc-900 text-sm font-medium shadow">
+                {formatTRY(dilekcePrice)}
+              </span>
+            </div>
+
+            <ul className="mt-4 space-y-2 text-sm text-zinc-300">
+              <li>• AI destekli ilk taslak</li>
+              <li>• Uzman tarafından son okuma</li>
+              <li>• Aynı gün PDF teslim (standart iş yükünde)</li>
             </ul>
-          </div>
-          <button
-            onClick={() => handleBuyClick("dilekce")}
-            className="mt-auto bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
-          >
-            Satın Al
-          </button>
-        </div>
 
-        {/* Uzman Yardımıyla Dilekçe Yazımı Paketi */}
-        <div className="bg-white rounded-lg shadow-lg p-6 flex flex-col justify-between">
-          <div>
-            <h3 className="text-xl font-semibold text-blue-700 leading-tight">
-              📄 Uzman Destekli Dilekçe
-            </h3>
-            <p
-              className={`text-sm px-2 py-1 mt-1 rounded inline-block ${
-                onlineLawyerCount > 0
-                  ? "text-green-700 bg-green-100"
-                  : "text-red-700 bg-red-100"
-              }`}
-            >
-              {onlineLawyerCount > 0
-                ? `${onlineLawyerCount} uzman çevrim içi`
-                : "Şu an uzman yok"}
-            </p>
-            <ul className="text-gray-700 mt-2 mb-4 space-y-1 list-disc list-inside">
-              <li>Görüşme ile dilekçe hazırlığı</li>
-              <li>Uzman desteğiyle PDF olarak teslim</li>
+            {/* iyzico güven satırı */}
+            <div className="mt-5 flex items-center gap-2 text-xs text-zinc-400">
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded bg-white/10 border border-white/15">🔒</span>
+              <span>Güvenli ödeme — iyzico altyapısı</span>
+            </div>
+
+            {/* CTA */}
+            <div className="mt-auto pt-5">
+              <button
+                onClick={() => setSelectedType("dilekce")}
+                className="w-full rounded-xl bg-white text-zinc-900 px-4 py-2 text-sm font-medium hover:bg-zinc-200 transition"
+              >
+                Satın Al
+              </button>
+            </div>
+          </article>
+
+          {/* Uzman Destek Kartı */}
+          <article className="group rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-5 hover:bg-white/10 transition shadow-sm h-full flex flex-col">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xl font-semibold text-white">📄 Uzman Destekli Dilekçe</h3>
+                  <span className="text-[10px] px-2 py-1 rounded-full bg-white/10 border border-white/15 text-zinc-300">
+                    En çok tercih edilen
+                  </span>
+                </div>
+                <p className="text-sm text-zinc-400 mt-1">Bire bir uzman desteği + yol haritası</p>
+              </div>
+              {/* Fiyat rozeti */}
+              <span className="rounded-full px-3 py-1 bg-white text-zinc-900 text-sm font-medium shadow">
+                {formatTRY(uzmanPrice)}
+              </span>
+            </div>
+
+            {/* Özellikler */}
+            <ul className="mt-4 space-y-2 text-sm text-zinc-300">
+              <li>• Vakaya özel değerlendirme</li>
+              <li>• Görüşme ile net yönlendirme</li>
+              <li>• Uzman desteğiyle PDF teslim</li>
             </ul>
-          </div>
 
-          <div className="flex flex-col gap-2">
-            <button
-              onClick={() => {
-                if (onlineLawyerCount > 0) {
-                  handleBuyClick("uzman");
-                }
-              }}
-              disabled={onlineLawyerCount === 0}
-              className={`py-2 rounded transition text-white ${
-                onlineLawyerCount > 0
-                  ? "bg-blue-600 hover:bg-blue-700"
-                  : "bg-gray-400 cursor-not-allowed"
-              }`}
-            >
-              Satın Al
-            </button>
+            {/* iyzico güven satırı */}
+            <div className="mt-5 flex items-center gap-2 text-xs text-zinc-400">
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded bg-white/10 border border-white/15">🔒</span>
+              <span>Güvenli ödeme — iyzico altyapısı</span>
+            </div>
 
-            {onlineLawyerCount === 0 && (
-              <p className="text-xs text-red-600 mt-1 text-center">
-                Uzmanlarımız yalnızca <strong>hafta içi 09:00 - 18:00</strong> saatleri arasında hizmet vermektedir.
-              </p>
-            )}
-          </div>
+            {/* CTA + Soft uyarı (uzman yokken) */}
+            <div className="mt-auto pt-5">
+              <button
+                onClick={() => {
+                  if (onlineLawyerCount > 0) setSelectedType("uzman");
+                }}
+                disabled={onlineLawyerCount === 0}
+                className={`w-full rounded-xl px-4 py-2 text-sm font-medium transition ${
+                  onlineLawyerCount > 0
+                    ? "bg-white text-zinc-900 hover:bg-zinc-200"
+                    : "bg-white/10 text-zinc-400 cursor-not-allowed border border-white/15"
+                }`}
+              >
+                Satın Al
+              </button>
+
+              {onlineLawyerCount === 0 && (
+                <p className="mt-2 text-xs text-center rounded-lg bg-red-500/10 border border-red-400/20 text-red-300 px-3 py-2">
+                  Şu anda çevrim içi uzman bulunmuyor. Uzmanlarımız çoğunlukla <strong>hafta içi 09:00–18:00</strong> arası çevrim içi olur.
+                </p>
+              )}
+            </div>
+          </article>
         </div>
       </div>
 
-      {/* DİLEKÇE & UZMAN MODAL */}
+      {/* Satın Al onay modalı */}
       {selectedType && (
         <DetailedPackageModal
           isOpen={true}
           onClose={() => setSelectedType(null)}
           onBuyClick={() =>
-            startPayment(selectedType, selectedType === "dilekce" ? 150 : 200)
+            startPayment(selectedType, selectedType === "dilekce" ? dilekcePrice : uzmanPrice)
           }
           type={selectedType}
         />
@@ -211,15 +251,13 @@ export default function Packages() {
         )}
       </Modal>
 
-      {/* No Lawyer Modal */}
+      {/* Uzman Yok Modal (korundu) */}
       <Modal isOpen={noLawyerModal} onClose={() => setNoLawyerModal(false)}>
         <div className="text-center p-4">
-          <h2 className="text-xl font-bold text-red-700 mb-2">
-            Şu anda çevrim içi uzman bulunmamaktadır
-          </h2>
+          <h2 className="text-xl font-bold text-white mb-1">Şu an çevrim içi uzman bulunmuyor</h2>
+          <p className="text-zinc-300 text-sm">Uygun olduğunda tekrar deneyebilirsiniz.</p>
         </div>
       </Modal>
     </section>
   );
 }
-

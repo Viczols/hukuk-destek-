@@ -4,10 +4,15 @@ export type BlogPost = {
   slug: string;
   title: string;
   excerpt: string;
-  coverUrl?: string;
+  content: string;
   tags?: string[];
-  publishedAt?: number; // timestamp
-  publishedAtText?: string; // "16 Ağu 2025" gibi
-  authorId?: string;
-  status?: "draft" | "published";
+  coverUrl?: string;
+  status: "draft" | "published";
+  authorId: string;
+  authorName?: string;
+  createdAt: number;   // Date.now()
+  updatedAt: number;
+  publishedAt?: number;
+  // BlogCard/Section ile uyum için:
+  publishedAtText?: string;
 };

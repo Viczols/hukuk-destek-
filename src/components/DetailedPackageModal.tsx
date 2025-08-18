@@ -1,4 +1,6 @@
-import { useState } from "react";
+// src/components/DetailedPackageModal.tsx
+"use client";
+import { useEffect, useRef, useState } from "react";
 
 interface DetailedPackageModalProps {
   isOpen: boolean;
@@ -15,105 +17,148 @@ export default function DetailedPackageModal({
 }: DetailedPackageModalProps) {
   const [accepted, setAccepted] = useState(false);
   const [confirmationText, setConfirmationText] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   const REQUIRED_TEXT = "Okudum, anladım ve kabul ediyorum";
   const isFormValid = accepted && confirmationText.trim() === REQUIRED_TEXT;
+  const isAI = type === "dilekce";
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setAccepted(false);
+    setConfirmationText("");
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (accepted) inputRef.current?.focus();
+  }, [accepted]);
 
   if (!isOpen) return null;
 
-  const isAI = type === "dilekce";
-
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center">
+    <div
+      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-[2px] flex items-center justify-center px-4"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
       <div
-        className="bg-white text-black rounded-xl shadow-2xl w-full max-w-lg p-8 relative"
+        onClick={(e) => e.stopPropagation()}
+        className="relative w-full max-w-xl rounded-2xl bg-zinc-900 text-zinc-100 shadow-2xl border border-zinc-800"
       >
-        {/* Kapat Butonu */}
+        {/* Kapat */}
         <button
           onClick={onClose}
-          className="absolute top-2 right-3 text-gray-500 hover:text-red-600 text-xl font-bold"
+          aria-label="Kapat"
+          className="absolute top-3 right-3 h-9 w-9 grid place-items-center rounded-full bg-zinc-800/90 border border-zinc-700 text-zinc-200 hover:bg-zinc-700 transition"
         >
-          ×
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
         </button>
 
-        {/* Başlık */}
-        <h2 className="text-2xl font-bold text-blue-800 mb-4">
-          {isAI
-            ? "🤖 Yapay Zeka ile Dilekçe Yazımı"
-            : "📄 Uzman Destekli Dilekçe"}
-        </h2>
+        <div className="p-6 md:p-7">
+          {/* Başlık */}
+          <div className="flex items-start gap-3">
+            <div className="h-9 w-9 grid place-items-center rounded-xl bg-zinc-800 border border-zinc-700">
+              {isAI ? "🤖" : "📄"}
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-xl md:text-2xl font-semibold tracking-tight text-white">
+                {isAI ? "Yapay Zekâ ile Dilekçe" : "Uzman Destekli Dilekçe"}
+              </h2>
+              <p className="mt-1 text-sm text-zinc-400">
+                {isAI
+                  ? "Hızlı taslak + uzman son okuma ile PDF teslim."
+                  : "Bire bir uzman desteği, vaka değerlendirme ve PDF teslim."}
+              </p>
+            </div>
+          </div>
 
-        {/* Açıklamalar */}
-        <ul className="list-disc list-inside text-gray-800 mb-4 space-y-2 text-sm">
-          {isAI ? (
-            <>
-              <li>Bu hizmet, yapay zeka tarafından otomatik dilekçe üretimi sunar.</li>
-              <li>Tarafınıza ilettiğiniz bilgiler doğrultusunda otomatik olarak oluşturulur.</li>
-              <li><strong>Yasal sorumluluk kabul edilmez.</strong> Dilekçeler bilgilendirme amaçlıdır.</li>
-            </>
-          ) : (
-            <>
-              <li>Bu hizmette, uzman desteğiyle dilekçeniz hazırlanır.</li>
-              <li>Durumunuz değerlendirildikten sonra size özel PDF olarak teslim edilir.</li>
-              <li>Dilekçe en geç <strong>1-3 iş günü</strong> içerisinde hazırlanır.</li>
-              <li><strong>Yasal sorumluluk tarafınıza aittir.</strong> Bilgilerin doğruluğu önemlidir.</li>
-            </>
-          )}
-        </ul>
+          {/* Ayırıcı */}
+          <div className="mt-5 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
 
-        {/* Onay Checkbox */}
-        <div className="flex items-start mb-4">
-          <input
-            id="accept"
-            type="checkbox"
-            checked={accepted}
-            onChange={(e) => setAccepted(e.target.checked)}
-            className="mt-1"
-          />
-          <label htmlFor="accept" className="ml-2 text-sm text-gray-700">
-            Yukarıdaki şartları <strong>kabul ediyorum</strong>.
-          </label>
-        </div>
+          {/* Açıklamalar — ilk halindeki gibi net ve yeterli */}
+          <ul className="mt-5 space-y-2 text-sm text-zinc-300">
+            {isAI ? (
+              <>
+                <li>• Sağladığınız bilgilere göre yapay zekâ ilk taslağı hazırlar.</li>
+                <li>• Nihai metin uzman tarafından kontrol edildikten sonra teslim edilir.</li>
+                <li>• Paylaştığınız bilgilerin doğruluğundan tarafınız sorumludur.</li>
+              </>
+            ) : (
+              <>
+                <li>• Uzman, dosyanızı değerlendirir ve yol haritası oluşturur.</li>
+                <li>• Durumunuza özel metin hazırlanır ve PDF olarak teslim edilir.</li>
+                <li>• Teslim süresi iş yoğunluğuna göre değişebilir (genellikle 1–3 iş günü).</li>
+              </>
+            )}
+          </ul>
 
-        {/* Onay Metni Girişi */}
-        <div className="mb-4">
-          <label htmlFor="confirmation" className="block text-sm font-medium text-gray-700 mb-1">
-            Lütfen aşağıdaki metni eksiksiz yazınız:
-          </label>
-          <p className="text-sm text-gray-600 italic mb-1">{`"${REQUIRED_TEXT}"`}</p>
-          <input
-            type="text"
-            id="confirmation"
-            value={confirmationText}
-            onChange={(e) => setConfirmationText(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring focus:border-blue-500"
-            placeholder="Metni buraya yazınız"
-          />
-        </div>
+          {/* Güven satırı */}
+          <div className="mt-5 flex items-center gap-2 text-xs text-zinc-400">
+            <span className="inline-flex h-5 w-5 items-center justify-center rounded bg-zinc-800 border border-zinc-700">🔒</span>
+            <span>Güvenli ödeme — iyzico altyapısı</span>
+          </div>
 
-        {/* Butonlar */}
-        <div className="flex justify-end gap-4">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 text-gray-700 bg-gray-200 rounded hover:bg-gray-300 transition"
-          >
-            Vazgeç
-          </button>
-          <button
-            onClick={() => {
-              if (isFormValid) {
-                onBuyClick();
-              }
-            }}
-            disabled={!isFormValid}
-            className={`px-4 py-2 text-white rounded transition ${
-              isFormValid
-                ? "bg-blue-600 hover:bg-blue-700"
-                : "bg-blue-300 cursor-not-allowed"
-            }`}
-          >
-            Satın Al ve Devam Et
-          </button>
+          {/* Onay Bloğu — soft, tek yerde referans metni */}
+          <div className="mt-6 rounded-xl border border-zinc-700 bg-zinc-800/60 p-4">
+            <label htmlFor="accept" className="flex items-center gap-3 cursor-pointer">
+              <input
+                id="accept"
+                type="checkbox"
+                checked={accepted}
+                onChange={(e) => setAccepted(e.target.checked)}
+                className="h-5 w-5 rounded border-zinc-600 bg-zinc-900 focus:ring-2 focus:ring-indigo-400/40"
+              />
+              <span className="text-sm font-medium text-zinc-100">Koşulları kabul ediyorum</span>
+            </label>
+
+            <div className="mt-3 grid gap-2">
+              <div className="text-xs text-zinc-400">
+                Devam etmek için aşağıdaki metni <span className="text-zinc-200">aynen</span> yazınız:
+              </div>
+              <div className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2">
+                <div className="text-[11px] text-zinc-500">Gerekli metin</div>
+                <div className="text-sm font-medium text-zinc-200 select-all">{REQUIRED_TEXT}</div>
+              </div>
+              <input
+                ref={inputRef}
+                type="text"
+                value={confirmationText}
+                onChange={(e) => setConfirmationText(e.target.value)}
+                placeholder="Metni buraya yazınız"
+                className="mt-1 w-full rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-sm text-white placeholder-zinc-500 outline-none focus:ring-2 focus:ring-indigo-400/40"
+              />
+            </div>
+          </div>
+
+          {/* Butonlar */}
+          <div className="mt-6 flex justify-end gap-3">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-200 hover:bg-zinc-800 transition"
+            >
+              Vazgeç
+            </button>
+            <button
+              onClick={() => isFormValid && onBuyClick()}
+              disabled={!isFormValid}
+              className={`px-4 py-2 rounded-lg font-medium transition ${
+                isFormValid
+                  ? "bg-white text-zinc-900 hover:bg-zinc-200"
+                  : "bg-zinc-700 text-zinc-400 cursor-not-allowed"
+              }`}
+            >
+              Satın Al ve Devam Et
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -10,14 +10,23 @@ import ChatButton from "../components/ChatButton";
 import ChatBox from "../components/ChatBox";
 import PurchaseSuccessModal from "../components/PurchaseSuccessModal";
 
-// YENİ: Blog bileşeni
+// Blog
 import BlogSection from "../components/BlogSection";
+import { BlogPost } from "../types/blog"; // BlogSection'ın beklediği tipe uygun
 
 import { useEffect, useState } from "react";
 import { dbRealtime, auth } from "../firebase/config";
 import { ref, onValue } from "firebase/database";
 import { onAuthStateChanged } from "firebase/auth";
-import { getFirestore, collection, query, where, getDocs } from "firebase/firestore";
+import {
+  getFirestore,
+  collection,
+  query,
+  where,
+  getDocs,
+  orderBy,
+  limit,
+} from "firebase/firestore";
 
 export default function Anasayfa() {
   const [chatOpen, setChatOpen] = useState(false);
@@ -131,39 +140,77 @@ export default function Anasayfa() {
     setChatOpen(true);
   };
 
-  // YENİ: Blog verisi (şimdilik mock; panel bağlanınca Firestore’dan gelecek)
-  const blogMock = [
-    {
-      id: "1",
-      slug: "is-akdinde-fesih-sureci",
-      title: "İş Akdinde Fesih Süreci: Dikkat Edilmesi Gerekenler",
-      excerpt:
-        "İş akdi fesih sürecinde işveren ve işçinin hakları, süreler ve tazminatlar...",
-      coverUrl: "/images/istockphoto-1328608958-612x612.jpg",
-      tags: ["iş-hukuku", "fesih"],
-      publishedAtText: "2 gün önce",
-    },
-    {
-      id: "2",
-      slug: "kira-uyusmazliklarinda-yeni-yol-haritasi",
-      title: "Kira Uyuşmazlıklarında Yeni Yol Haritası",
-      excerpt:
-        "Arabuluculuk şartı, tahliye davası, kira tespiti ve pratik öneriler...",
-      coverUrl: "/images/ChatGPT Image 15 Ağu 2025 16_18_37.png",
-      tags: ["gayrimenkul", "arabuluculuk"],
-      publishedAtText: "1 hafta önce",
-    },
-    {
-      id: "3",
-      slug: "miras-planlamasi-icin-ipuclari",
-      title: "Miras Planlaması İçin 7 İpucu",
-      excerpt:
-        "Vasiyetname, saklı pay, miras sözleşmesi… Hangi adımlar riski azaltır?",
-      coverUrl: "/images/ChatGPT Image 15 Ağu 2025 16_15_57.png",
-      tags: ["miras", "aile-hukuku"],
-      publishedAtText: "12 gün önce",
-    },
-  ];
+  // --- BLOG: Firestore'dan yayınlanmış yazıları çek ---
+  const [blogPosts, setBlogPosts] = useState<BlogPost[]>([]);
+  const [blogLoading, setBlogLoading] = useState<boolean>(true);
+
+useEffect(() => {
+  (async () => {
+    try {
+      setBlogLoading(true);
+      const db = getFirestore();
+      // ÖNCE hızlı yol (index varsa):
+      try {
+        const qRef = query(
+          collection(db, "posts"),
+          where("status", "==", "published"),
+          orderBy("publishedAt", "desc"),
+          limit(12)
+        );
+        const snap = await getDocs(qRef);
+        setBlogPosts(mapPosts(snap.docs));
+      } catch (err: any) {
+        // Index yoksa fallback: orderBy'sız çek → client-side sort
+        const qRef = query(
+          collection(db, "posts"),
+          where("status", "==", "published")
+        );
+        const snap = await getDocs(qRef);
+        const list = mapPosts(snap.docs);
+        list.sort((a, b) => (b.publishedAt ?? 0) - (a.publishedAt ?? 0));
+        setBlogPosts(list.slice(0, 12));
+      }
+    } finally {
+      setBlogLoading(false);
+    }
+  })();
+
+  function toMs(v: any, fallback = 0) {
+    return typeof v === "number" ? v : (v?.toMillis?.() ?? fallback);
+  }
+  function mapPosts(docs: any[]): BlogPost[] {
+    const fmt = new Intl.RelativeTimeFormat("tr", { numeric: "auto" });
+    const daysDiff = (ms: number) => Math.round((ms - Date.now()) / (1000 * 60 * 60 * 24));
+    return docs.map((d: any) => {
+      const data = d.data();
+      const publishedAt = toMs(data.publishedAt, 0);
+      const createdAt = toMs(data.createdAt, publishedAt || Date.now());
+      const updatedAt = toMs(data.updatedAt, publishedAt || createdAt);
+      const excerpt =
+        data.excerpt ??
+        (String(data.content ?? "")
+          .replace(/\s+/g, " ")
+          .slice(0, 180) + (String(data.content ?? "").length > 180 ? "…" : ""));
+      return {
+        id: d.id,
+        slug: data.slug,
+        title: data.title,
+        excerpt,
+        coverUrl: data.coverUrl,
+        tags: data.tags ?? [],
+        publishedAtText: publishedAt ? fmt.format(daysDiff(publishedAt), "day") : "Yeni",
+        content: data.content ?? "",
+        status: (data.status as "draft" | "published") ?? "published",
+        authorId: data.authorId ?? "",
+        createdAt,
+        updatedAt,
+        publishedAt,
+        authorName: data.authorName ?? undefined,
+      } as BlogPost;
+    });
+  }
+}, []);
+
 
   return (
     <main>
@@ -172,11 +219,12 @@ export default function Anasayfa() {
       <Hero />
       <Packages />
 
-      {/* YENİ: Blog – Paketler'in hemen altında */}
-      <BlogSection posts={blogMock} />
-
-      <FAQ />
-      <Footer />
+      {/* Blog – Paketler'in hemen altında */}
+      <div className="relative bg-gradient-to-b from-zinc-950 via-zinc-900 to-zinc-900">
+        <BlogSection posts={blogPosts} />
+        <FAQ />
+        <Footer />
+      </div>
 
       <PurchaseSuccessModal
         isOpen={showSuccessModal}
