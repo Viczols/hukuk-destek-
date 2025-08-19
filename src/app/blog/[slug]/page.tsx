@@ -1,6 +1,7 @@
 // src/app/blog/[slug]/page.tsx
 "use client";
 
+import React from "react";
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
@@ -15,11 +16,16 @@ import {
 } from "firebase/firestore";
 import { BlogPost } from "../../../types/blog";
 
-export default function BlogPostPage({ params }: { params: { slug: string } }) {
+export default function BlogPostPage({
+  params,
+}: {
+  params: Promise<{ slug: string }>;
+}) {
+  const { slug } = React.use(params); // <-- Next 15: params Promise, burada unwrap ediyoruz
+
   const db = getFirestore();
   const [post, setPost] = useState<BlogPost | null>(null);
   const [others, setOthers] = useState<BlogPost[]>([]);
-  const slug = params.slug;
 
   useEffect(() => {
     (async () => {

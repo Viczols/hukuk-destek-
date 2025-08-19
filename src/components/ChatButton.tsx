@@ -5,7 +5,7 @@ import React from "react";
 
 type Props = {
   onClick: () => void;
-  expertOnline?: boolean; // küçük durum noktası için
+  expertOnline?: boolean;
   unreadCount?: number;
 };
 
@@ -22,20 +22,20 @@ const ChatButton: React.FC<Props> = ({ onClick, expertOnline = false, unreadCoun
           width: 64,
           height: 64,
           borderRadius: "50%",
-          border: "none",
+          border: "1px solid rgba(0,0,0,0.15)",
           cursor: "pointer",
-          background: "#1976d2", // eski mavi
-          boxShadow: "0 12px 28px rgba(25,118,210,0.35)",
+          background: "#ffffff", // beyaz arka plan
+          boxShadow: "0 14px 30px rgba(0,0,0,0.35), 0 0 0 4px rgba(255,255,255,0.15)",
           display: "grid",
           placeItems: "center",
           transition: "transform .12s ease, filter .12s ease",
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.filter = "brightness(1.05)")}
+        onMouseEnter={(e) => (e.currentTarget.style.filter = "brightness(0.98)")}
         onMouseLeave={(e) => (e.currentTarget.style.filter = "none")}
         onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
         onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
       >
-        {/* küçük durum göstergesi */}
+        {/* durum noktası */}
         <span
           title={expertOnline ? "Uzman çevrimiçi" : "Uzman çevrimdışı"}
           style={{
@@ -50,15 +50,15 @@ const ChatButton: React.FC<Props> = ({ onClick, expertOnline = false, unreadCoun
           }}
         />
 
-        {/* sohbet ikonu */}
+        {/* siyah sohbet ikonu (kontrast) */}
         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path
             d="M20 12c0 3.866-3.582 7-8 7-1.043 0-2.04-.16-2.957-.45L4 20l1.45-4.957C5.16 14.126 5 13.13 5 12c0-3.866 3.582-7 8-7s7 3.134 7 7Z"
-            fill="#fff"
+            fill="#0f1115"
           />
         </svg>
 
-        {/* (opsiyonel) okunmamış rozet */}
+        {/* okunmamış rozet */}
         {count > 0 && (
           <span
             aria-label={`${count} okunmamış mesaj`}

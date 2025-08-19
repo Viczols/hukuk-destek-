@@ -22,9 +22,7 @@ import {
 import {
   getStorage,
   ref,
-  uploadBytes,
-  getDownloadURL,
-  deleteObject,
+  deleteObject, // delete için bırakıyoruz
 } from "firebase/storage";
 
 /* ===================== Firebase tekil referanslar ===================== */
@@ -167,32 +165,45 @@ export default function BlogPage() {
     setEditing(null);
   }
 
-  /* -------------------- Cover upload (strong helper) ------------------ */
+  /* --------- Kapak upload: API route (ID token ile, CORS’suz) --------- */
   async function uploadCoverIfSelected(postId: string) {
     if (!coverFile) {
       console.log("[BLOG] no coverFile selected — skipping upload");
       return;
     }
-    // güvenli dosya adı üret
-    const name = safeFilename(coverFile.name, coverFile.type);
-    const filePath = `covers/${userId}/${postId}/${name}`;
-    const fileRef = ref(storage, filePath);
-    const meta = { contentType: coverFile.type || "application/octet-stream" };
+    const user = auth.currentUser;
+    if (!user) throw new Error("no-auth");
 
-    console.log("[BLOG] uploading cover:", filePath, meta);
-    try {
-      await uploadBytes(fileRef, coverFile, meta);
-      const coverUrl = await getDownloadURL(fileRef);
-      await updateDoc(doc(db, "posts", postId), {
-        coverUrl,
-        coverPath: filePath,
-        updatedAt: Date.now(),
-      });
-      console.log("[BLOG] cover uploaded:", coverUrl);
-    } catch (err: any) {
-      console.error("[BLOG] cover upload FAILED:", err?.code, err?.message || err);
-      throw err;
+    // güvenli dosya adı üret
+    const safeName = safeFilename(coverFile.name, coverFile.type);
+
+    const fd = new FormData();
+    fd.append("file", coverFile, safeName);
+    fd.append("postId", postId);
+
+    const idToken = await user.getIdToken();
+
+    const res = await fetch("/api/blogUpload", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${idToken}` },
+      body: fd,
+    });
+
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      console.error("[BLOG] cover upload via API failed:", res.status, t);
+      throw new Error("upload-api-failed");
     }
+
+    const uploaded = (await res.json()) as { coverUrl: string; coverPath: string };
+
+    await updateDoc(doc(db, "posts", postId), {
+      coverUrl: uploaded.coverUrl,
+      coverPath: uploaded.coverPath,
+      updatedAt: Date.now(),
+    });
+
+    console.log("[BLOG] cover uploaded:", uploaded.coverUrl);
   }
 
   /* --------------------- Upsert (create or update) -------------------- */
@@ -232,7 +243,7 @@ export default function BlogPage() {
       console.log("[BLOG] created post:", postId);
     }
 
-    // Kapak (varsa)
+    // Kapak (varsa) — API route üzerinden
     try {
       await uploadCoverIfSelected(postId);
     } catch {
