@@ -220,25 +220,6 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
                         </span>
                       )}
 
-                      {/* 🔧 ÖNEMLİ DEĞİŞİKLİK:
-                           PDF Yükle butonu artık SADECE 'uzman' paketi için ve pending iken gösterilir.
-                           'dilekce' (AI) için ASLA gösterilmez. */}
-                      {isPending && isUzman && (
-                        <button
-                          onClick={() => openFileDialog(p.id)}
-                          disabled={uploadingId === p.id}
-                          className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${
-                            uploadingId === p.id
-                              ? "bg-zinc-700 text-zinc-400 cursor-wait"
-                              : "bg-zinc-800 text-zinc-200 hover:bg-zinc-700 border border-zinc-700"
-                          }`}
-                        >
-                          <svg width="14" height="14" viewBox="0 0 24 24" className="fill-current">
-                            <path d="M12 3a1 1 0 0 1 1 1v7h3l-4 4-4-4h3V4a1 1 0 0 1 1-1zm-5 14a1 1 0 0 0-1 1v2h12v-2a1 1 0 1 0-2 0v1H8v-1a1 1 0 0 0-1-1z" />
-                          </svg>
-                          {uploadingId === p.id ? "Yükleniyor" : "PDF Yükle"}
-                        </button>
-                      )}
 
                       {/* Görüşme/Uzman paketi için sohbet */}
                       {isPending && (isGorusme || isUzman) && (

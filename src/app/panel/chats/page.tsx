@@ -1,4 +1,3 @@
-// app/panel/chats/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -94,33 +93,18 @@ function setLastSeen(roomId: string, ms: number) {
   } catch {}
 }
 
-/* ============ audio notification helpers ============ */
-function getAudioEnabled() {
-  try {
-    return localStorage.getItem("notifyAudio") === "1";
-  } catch {
-    return false;
-  }
-}
-function setAudioEnabled(v: boolean) {
-  try {
-    localStorage.setItem("notifyAudio", v ? "1" : "0");
-  } catch {}
-}
-
 /* ============ email helpers ============ */
 function maskEmail(raw: string) {
   const [local, domain] = raw.split("@");
   if (!domain) return raw;
   const [host, ...rest] = domain.split(".");
-  const tld = rest.join("."); // ör: com / com.tr
+  const tld = rest.join(".");
   const m = (s: string) =>
     s.length <= 2 ? s[0] + "*" : s[0] + "*".repeat(Math.max(1, Math.min(4, s.length - 2))) + s.slice(-1);
   return `${m(local)}@${m(host)}${tld ? "." + tld : ""}`;
 }
 
 async function fetchEmailByUid(uid: string): Promise<string | null> {
-  // 1) Firestore users/{uid}
   try {
     const d = await getDoc(doc(db, "users", uid));
     if (d.exists()) {
@@ -129,7 +113,6 @@ async function fetchEmailByUid(uid: string): Promise<string | null> {
       if (email && typeof email === "string") return email;
     }
   } catch {}
-  // 2) RTDB users/{uid}/(profile/email | email)
   try {
     const p1 = await rGet(rChild(rRef(dbRealtime), `users/${uid}/profile/email`));
     const p2 = await rGet(rChild(rRef(dbRealtime), `users/${uid}/email`));
@@ -144,65 +127,10 @@ async function fetchEmailByUid(uid: string): Promise<string | null> {
 export default function ChatsPage() {
   const auth = getAuth();
   const [all, setAll] = useState<ChatReq[]>([]);
-  const [audioReady, setAudioReady] = useState(getAudioEnabled());
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [q, setQ] = useState("");
 
   // uid -> masked email cache
   const [emailMap, setEmailMap] = useState<Record<string, string>>({});
-
-  // Ses kaynağı
-  useEffect(() => {
-    const test = new Audio();
-    test.src = "/notification.mp3";
-    test.addEventListener("error", () => {
-      audioRef.current = new Audio(
-        "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABYAZGF0YQAAAAA="
-      );
-    });
-    test.addEventListener("canplaythrough", () => {
-      audioRef.current = test;
-    });
-  }, []);
-
-  // İlk kullanıcı etkileşiminde sesi “unlock” et
-  useEffect(() => {
-    if (audioReady) return;
-    const onFirstClick = () => {
-      try {
-        if (!audioRef.current) {
-          audioRef.current = new Audio(
-            "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABYAZGF0YQAAAAA="
-          );
-        }
-        audioRef.current.currentTime = 0;
-        audioRef.current.play().catch(() => {});
-        setAudioEnabled(true);
-        setAudioReady(true);
-      } catch {}
-      window.removeEventListener("pointerdown", onFirstClick);
-      window.removeEventListener("keydown", onFirstClick);
-    };
-    window.addEventListener("pointerdown", onFirstClick, { once: true });
-    window.addEventListener("keydown", onFirstClick, { once: true });
-    return () => {
-      window.removeEventListener("pointerdown", onFirstClick);
-      window.removeEventListener("keydown", onFirstClick);
-    };
-  }, [audioReady]);
-
-  const unlockAudio = () => {
-    try {
-      if (!audioRef.current) {
-        audioRef.current = new Audio(
-          "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABYAZGF0YQAAAAA="
-        );
-      }
-      audioRef.current.currentTime = 0;
-      audioRef.current.play().catch(() => {});
-      setAudioEnabled(true);
-      setAudioReady(true);
-    } catch {}
-  };
 
   // bekleyen + atanmışları dinle
   useEffect(() => {
@@ -250,6 +178,20 @@ export default function ChatsPage() {
     return all.filter((x) => x.assignedLawyerId === uid && x.status !== "closed");
   }, [all, auth.currentUser?.uid]);
 
+  // Arama (purchaseId / masked email / uid)
+  const filterText = q.trim().toLowerCase();
+  const match = (t: ChatReq) => {
+    if (!filterText) return true;
+    const mail = emailMap[t.userId] ?? "";
+    return (
+      t.purchaseId.toLowerCase().includes(filterText) ||
+      t.userId.toLowerCase().includes(filterText) ||
+      mail.toLowerCase().includes(filterText)
+    );
+  };
+  const waitingFiltered = useMemo(() => waiting.filter(match), [waiting, filterText, emailMap]);
+  const mineFiltered = useMemo(() => mine.filter(match), [mine, filterText, emailMap]);
+
   const claim = async (item: ChatReq) => {
     const uid = auth.currentUser?.uid;
     if (!uid) return alert("Önce giriş yapın.");
@@ -287,51 +229,84 @@ export default function ChatsPage() {
   };
 
   return (
-    <div className="space-y-10 p-4 md:p-6">
+    <div className="space-y-8 p-4 md:p-6">
+      {/* Başlık + arama */}
       <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-2xl font-semibold">Sohbet Paneli</h1>
-        <a href="/" className="ml-auto rounded-lg border px-3 py-2 text-sm hover:bg-gray-50">
-          Anasayfa
-        </a>
-        {!audioReady && (
-          <button
-            onClick={unlockAudio}
-            className="rounded-lg bg-black px-3 py-2 text-sm text-white hover:bg-black/90"
-            title="Yeni mesaj geldiğinde ping sesi çal"
-          >
-            Bildirim Sesini Aç
-          </button>
-        )}
+        <h1 className="text-2xl font-semibold text-zinc-900">Sohbet Paneli</h1>
+        <div className="ml-auto flex items-center gap-2">
+          <div className="hidden sm:flex items-center gap-2 text-xs sm:text-sm">
+            <span className="rounded-full bg-zinc-200 px-2 py-1 text-zinc-800">
+              Bekleyen: <strong>{waiting.length}</strong>
+            </span>
+            <span className="rounded-full bg-zinc-200 px-2 py-1 text-zinc-800">
+              Atanmış: <strong>{mine.length}</strong>
+            </span>
+          </div>
+
+          {/* modern arama alanı */}
+          <div className="relative">
+            <svg
+              className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-zinc-400"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+              <path d="M20 20l-3.5-3.5" stroke="currentColor" strokeWidth="2" />
+            </svg>
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Ara: purchaseId / e-posta / uid"
+              className="w-64 rounded-lg border border-zinc-300 bg-zinc-100 pl-9 pr-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-900/15"
+            />
+          </div>
+        </div>
       </div>
 
       {/* Bekleyenler */}
       <section>
-        <h2 className="text-lg font-semibold">Bekleyen İstekler</h2>
-        <div className="mt-4 grid gap-3">
-          {waiting.length === 0 && (
-            <div className="rounded-lg border p-4 text-sm text-gray-500">Bekleyen yok.</div>
+        <header className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-zinc-900">
+            Bekleyen İstekler
+            <span className="ml-2 rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-800">
+              {waitingFiltered.length}
+            </span>
+          </h2>
+        </header>
+
+        <div className="grid gap-3">
+          {waitingFiltered.length === 0 && (
+            <div className="rounded-xl border border-zinc-200 bg-zinc-100 p-4 text-sm text-zinc-600">
+              Sonuç yok.
+            </div>
           )}
-          {waiting.map((w) => (
-            <div key={`${w._src}-${w.id}`} className="rounded-xl border bg-white p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm text-gray-600">
+          {waitingFiltered.map((w) => (
+            <div
+              key={`${w._src}-${w.id}`}
+              className="rounded-xl border border-zinc-300 bg-zinc-100/80 backdrop-blur shadow-sm hover:shadow-md transition"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+                <div className="min-w-0">
+                  <div className="text-sm text-zinc-700">
                     purchaseId: <span className="font-mono">{w.purchaseId}</span>
                   </div>
-                  <div className="text-sm">
+                  <div className="text-sm text-zinc-800">
                     Kullanıcı:{" "}
                     <span title={emailMap[w.userId] ? "Maskeleme uygulanmıştır" : "E-posta bulunamadı"}>
                       {emailMap[w.userId] ?? w.userId}
                     </span>
                   </div>
-                  <div className="text-xs text-gray-400">kaynak: {w._src}</div>
+                  <div className="text-xs text-zinc-500">kaynak: {w._src}</div>
                 </div>
-                <button
-                  onClick={() => claim(w)}
-                  className="rounded-lg bg-black px-3 py-2 text-white hover:bg-black/90"
-                >
-                  Üstlen
-                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => claim(w)}
+                    className="rounded-lg bg-zinc-800 px-3 py-2 text-white hover:bg-zinc-700 transition"
+                  >
+                    Üstlen
+                  </button>
+                </div>
               </div>
             </div>
           ))}
@@ -340,18 +315,27 @@ export default function ChatsPage() {
 
       {/* Atanmışlar */}
       <section>
-        <h2 className="text-lg font-semibold">Atanmış Sohbetler</h2>
-        <div className="mt-4 grid gap-3">
-          {mine.length === 0 && (
-            <div className="rounded-lg border p-4 text-sm text-gray-500">Atanmış sohbet yok.</div>
+        <header className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-zinc-900">
+            Atanmış Sohbetler
+            <span className="ml-2 rounded-full bg-zinc-200 px-2 py-0.5 text-xs text-zinc-800">
+              {mineFiltered.length}
+            </span>
+          </h2>
+        </header>
+
+        <div className="grid gap-3">
+          {mineFiltered.length === 0 && (
+            <div className="rounded-xl border border-zinc-200 bg-zinc-100 p-4 text-sm text-zinc-600">
+              Sonuç yok.
+            </div>
           )}
-          {mine.map((c) => (
+
+          {mineFiltered.map((c) => (
             <PanelChat
               key={`${c._src}-${c.id}`}
               purchaseId={c.purchaseId}
               userIdLabel={emailMap[c.userId] ?? c.userId}
-              audioRef={audioRef}
-              audioEnabled={audioReady}
             />
           ))}
         </div>
@@ -374,15 +358,10 @@ type Msg = {
 function PanelChat({
   purchaseId,
   userIdLabel,
-  audioRef,
-  audioEnabled,
 }: {
   purchaseId: string;
   userIdLabel: string; // masked e-posta veya uid
-  audioRef: React.MutableRefObject<HTMLAudioElement | null>;
-  audioEnabled: boolean;
 }) {
-  const auth = getAuth();
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [rtdbErr, setRtdbErr] = useState<string | null>(null);
@@ -417,17 +396,15 @@ function PanelChat({
               setPulse(true);
               setTimeout(() => setPulse(false), 1200);
               setUnread((u) => u + 1);
-              if (audioEnabled && audioRef.current) {
-                try {
-                  audioRef.current.currentTime = 0;
-                  audioRef.current.play().catch(() => {});
-                } catch {}
-              }
+              // 🔇 izin hatasını UI'da göstermiyoruz
             }
           }
         });
       },
-      (err) => setRtdbErr(err?.message || "RTDB okuma hatası")
+      (err) => {
+        setRtdbErr(err?.message || "RTDB okuma hatası");
+        console.warn("[RTDB]", err?.message || err);
+      }
     );
 
     const fsq = query(
@@ -448,12 +425,6 @@ function PanelChat({
               setPulse(true);
               setTimeout(() => setPulse(false), 1200);
               setUnread((u) => u + 1);
-              if (audioEnabled && audioRef.current) {
-                try {
-                  audioRef.current.currentTime = 0;
-                  audioRef.current.play().catch(() => {});
-                } catch {}
-              }
             }
           }
         });
@@ -465,7 +436,7 @@ function PanelChat({
       off();
       unsub();
     };
-  }, [open, purchaseId, audioEnabled, audioRef]);
+  }, [open, purchaseId]);
 
   // -------- tam dinleyici (akkordion AÇIKKEN)
   useEffect(() => {
@@ -503,7 +474,10 @@ function PanelChat({
         });
         nextTickScroll(listRef);
       },
-      (err) => setRtdbErr(err?.message || "RTDB okuma hatası")
+      (err) => {
+        setRtdbErr(err?.message || "RTDB okuma hatası");
+        console.warn("[RTDB]", err?.message || err);
+      }
     );
 
     const fsq = query(
@@ -538,7 +512,7 @@ function PanelChat({
       () => {}
     );
 
-    return () => {
+  return () => {
       off();
       unsub();
     };
@@ -593,41 +567,48 @@ function PanelChat({
   return (
     <div
       className={[
-        "overflow-hidden rounded-xl border bg-white transition ring-0",
-        pulse ? "ring-2 ring-red-400" : "",
+        // Gri ağırlıklı ana yüzey
+        "overflow-hidden rounded-2xl border border-zinc-300 bg-zinc-100/90 backdrop-blur shadow-sm transition",
+        pulse ? "ring-2 ring-rose-400" : "",
       ].join(" ")}
     >
       <button
         onClick={toggleOpen}
-        className="flex w-full items-center justify-between gap-3 p-4 text-left hover:bg-gray-50"
+        className="flex w-full items-center justify-between gap-3 p-4 text-left hover:bg-zinc-100"
       >
         <div className="min-w-0">
-          <div className="font-medium">
-            #{purchaseId} <span className="text-gray-400">• {userIdLabel}</span>
+          <div className="font-medium text-zinc-900">
+            #{purchaseId} <span className="text-zinc-600">• {userIdLabel}</span>
           </div>
-          {rtdbErr && <div className="mt-1 text-xs text-red-600">{rtdbErr}</div>}
+          {/* rtdbErr mevcut olsa bile son kullanıcıya göstermiyoruz */}
         </div>
 
         <div className="flex items-center gap-2">
           {unread > 0 && (
-            <span className="animate-pulse rounded-full bg-black px-2 py-1 text-xs text-white">
-              {unread}
-            </span>
+            <span className="rounded-full bg-zinc-800 px-2 py-1 text-xs text-white">{unread}</span>
           )}
-          <div className="shrink-0 rounded-full bg-gray-100 px-2 py-1 text-xs">
+          <div className="shrink-0 rounded-full bg-zinc-200 px-2 py-1 text-xs text-zinc-800">
             {open ? "Kapat" : "Aç"}
           </div>
         </div>
       </button>
 
       {open && (
-        <div className="border-t bg-gray-50 p-3">
-          <div ref={listRef} className="h-64 overflow-y-auto rounded-lg bg-white p-3 text-sm">
+        <div className="border-t border-zinc-300 bg-zinc-100 p-3">
+          <div
+            ref={listRef}
+            className="h-64 overflow-y-auto rounded-xl bg-zinc-100 p-3 text-sm shadow-inner"
+          >
             {msgs.map((m) => (
-              <div key={m.id} className={`mb-2 flex ${m.role === "lawyer" ? "justify-end" : "justify-start"}`}>
+              <div
+                key={m.id}
+                className={`mb-2 flex ${m.role === "lawyer" ? "justify-end" : "justify-start"}`}
+              >
                 <div
                   className={`max-w-[80%] rounded-2xl px-3 py-2 ${
-                    m.role === "lawyer" ? "bg-black text-white" : "bg-gray-100"
+                    m.role === "lawyer"
+                      ? "bg-zinc-800 text-white"      // siyahı aksan olarak kullan
+                      : "bg-zinc-200 text-zinc-900"   // kullanıcı mesajı: yoğun gri
                   }`}
                 >
                   <div className="whitespace-pre-wrap">{m.text}</div>
@@ -637,7 +618,7 @@ function PanelChat({
                 </div>
               </div>
             ))}
-            {msgs.length === 0 && <div className="text-center text-gray-400">Mesaj yok.</div>}
+            {msgs.length === 0 && <div className="text-center text-zinc-500">Mesaj yok.</div>}
           </div>
 
           <div className="mt-3 flex items-center gap-2">
@@ -651,9 +632,13 @@ function PanelChat({
                 }
               }}
               placeholder="Mesaj yaz..."
-              className="flex-1 rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/20"
+              className="flex-1 rounded-lg border border-zinc-300 bg-zinc-100 px-3 py-2 text-sm text-zinc-900 outline-none focus:ring-2 focus:ring-zinc-900/15"
             />
-            <button onClick={send} className="rounded-lg bg-black px-3 py-2 text-white hover:bg-black/90">
+            <button
+              onClick={send}
+              disabled={!input.trim()}
+              className="rounded-lg bg-zinc-800 px-3 py-2 text-white hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+            >
               Gönder
             </button>
           </div>

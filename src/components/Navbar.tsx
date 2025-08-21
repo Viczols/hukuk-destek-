@@ -10,16 +10,46 @@ import Modal from "./Modal";
 import LoginForm from "./LoginForm";
 import RegisterForm from "./RegisterForm";
 import PurchaseHistoryModal from "./PurchaseHistoryModal";
+import { usePathname } from "next/navigation";
+
+type HideKey =
+  | "danismanlik"
+  | "paketler"
+  | "blog"
+  | "sss"
+  | "panel"
+  | "history"
+  | "auth";
 
 type Props = {
   onStartChatFromHistory?: (purchaseId: string) => void;
+
+  /** Varsayılan: "default". "consulting" -> Online Danışmanlık butonu hafif highlight */
+  variant?: "default" | "consulting";
+
+  /** Sayfa bazlı link gizleme */
+  hideLinks?: HideKey[];
+
+  /** Solda ekstra içerik (rozet/geri butonu gibi) */
+  extraLeft?: React.ReactNode;
+
+  /** Sağda ekstra içerik (CTA gibi) */
+  extraRight?: React.ReactNode;
 };
 
-export default function Navbar({ onStartChatFromHistory }: Props) {
+export default function Navbar({
+  onStartChatFromHistory,
+  variant = "default",
+  hideLinks = [],
+  extraLeft,
+  extraRight,
+}: Props) {
   const [modalType, setModalType] = useState<null | "login" | "register">(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [isLawyer, setIsLawyer] = useState(false);
+  const pathname = usePathname();
+  const showGlow = variant === "consulting" || pathname === "/"; // anasayfada hep açık
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -61,81 +91,104 @@ export default function Navbar({ onStartChatFromHistory }: Props) {
     setModalType(null);
   };
 
+  const isHidden = (k: HideKey) => hideLinks.includes(k);
+
+  // Online Danışmanlık düğmesinin sınıfı (mevcut stil + consulting varyantında minimal glow)
+  const consultingClass =
+    variant === "consulting"
+      ? `
+        group relative px-4 py-2 rounded-full font-semibold
+        text-white bg-zinc-900/90
+        border border-white/10
+        shadow-[0_6px_20px_rgba(0,0,0,.25)]
+        transition-all duration-200
+        hover:-translate-y-0.5 hover:bg-zinc-900
+      `
+      : `
+        group relative px-4 py-2 rounded-full font-semibold
+        text-white bg-zinc-900/90
+        border border-white/10
+        shadow-[0_6px_20px_rgba(0,0,0,.25)]
+        transition-all duration-200
+        hover:-translate-y-0.5 hover:bg-zinc-900
+      `;
+
   return (
     <header className="sticky top-0 z-50 bg-white/70 backdrop-blur border-b border-zinc-200">
       <div className="max-w-6xl mx-auto px-4 h-16 flex justify-between items-center">
-        <a
-          href="/"
-          className="text-xl font-semibold tracking-tight text-zinc-900"
-        >
-          HukukDestek
-        </a>
+        {/* Sol taraf (Logo + optional extraLeft) */}
+        <div className="flex items-center gap-3">
+          <a
+            href="/"
+            className="text-xl font-semibold tracking-tight text-zinc-900"
+          >
+            HukukDestek
+          </a>
+
+          {extraLeft /* sayfa özel ekler */}
+        </div>
 
         {/* NAV */}
         <nav className="hidden md:flex items-center gap-2 text-sm">
-          {/* YENİ: Online Danışmanlık (en başta ve farklı stil) */}
-          <a
-            href="/danismanlik"
-            className="
-    group relative px-4 py-2 rounded-full font-semibold
-    text-white bg-zinc-900/90
-    border border-white/10
-    shadow-[0_6px_20px_rgba(0,0,0,.25)]
-    transition-all duration-200
-    hover:-translate-y-0.5 hover:bg-zinc-900
-  "
-          >
-            {/* neon kenar parıltısı */}
-            <span
-              className="
-      pointer-events-none absolute inset-0 rounded-full
-      bg-[radial-gradient(120px_60px_at_center,rgba(99,102,241,.35),transparent)]
-      opacity-0 group-hover:opacity-100 transition-opacity
-    "
-              aria-hidden
-            />
-            {/* içerik */}
-            <span className="relative z-10 flex items-center gap-2">
-              {/* küçük sohbet ikonu */}
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                aria-hidden="true"
-                className="opacity-90"
-              >
-                <path
-                  d="M20 12c0 3.866-3.582 7-8 7-1.043 0-2.04-.16-2.957-.45L4 20l1.45-4.957C5.16 14.126 5 13.13 5 12c0-3.866 3.582-7 8-7s7 3.134 7 7Z"
-                  fill="currentColor"
+          {/* Online Danışmanlık - en başta ve farklı stil (gizlenebilir) */}
+          {!isHidden("danismanlik") && (
+            <a href="/danismanlik" className={consultingClass}>
+              {showGlow && (
+                <span
+                  className="
+                    pointer-events-none absolute inset-0 rounded-full
+                    bg-[radial-gradient(120px_60px_at_center,rgba(99,102,241,.35),transparent)]
+                    opacity-0 group-hover:opacity-100 transition-opacity
+                  "
+                  aria-hidden
                 />
-              </svg>
-              <span>Online Danışmanlık</span>
-            </span>
-          </a>
+              )}
+              <span className="relative z-10 flex items-center gap-2">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                  className="opacity-90"
+                >
+                  <path
+                    d="M20 12c0 3.866-3.582 7-8 7-1.043 0-2.04-.16-2.957-.45L4 20l1.45-4.957C5.16 14.126 5 13.13 5 12c0-3.866 3.582-7 8-7s7 3.134 7 7Z"
+                    fill="currentColor"
+                  />
+                </svg>
+                <span>Online Danışmanlık</span>
+              </span>
+            </a>
+          )}
 
-          <a
-            href="#paketler"
-            className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
-          >
-            Paketler
-          </a>
+          {!isHidden("paketler") && (
+            <a
+              href="#paketler"
+              className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
+            >
+              Paketler
+            </a>
+          )}
 
-          {/* Blog */}
-          <a
-            href="#blog"
-            className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
-          >
-            Blog
-          </a>
+          {!isHidden("blog") && (
+            <a
+              href="#blog"
+              className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
+            >
+              Blog
+            </a>
+          )}
 
-          <a
-            href="#sss"
-            className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
-          >
-            SSS
-          </a>
+          {!isHidden("sss") && (
+            <a
+              href="#sss"
+              className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
+            >
+              SSS
+            </a>
+          )}
 
-          {isLawyer && (
+          {isLawyer && !isHidden("panel") && (
             <a
               href="/panel"
               className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
@@ -144,14 +197,21 @@ export default function Navbar({ onStartChatFromHistory }: Props) {
             </a>
           )}
 
+          {/* Sağ yana sayfa özel CTA/öğe koymak için */}
+          {extraRight}
+
+          {/* Hesap / Auth modülleri */}
+          {!isHidden("history") && userEmail && (
+            <button
+              onClick={() => setShowHistoryModal(true)}
+              className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
+            >
+              Satın Alma Geçmişi
+            </button>
+          )}
+
           {userEmail ? (
             <>
-              <button
-                onClick={() => setShowHistoryModal(true)}
-                className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
-              >
-                Satın Alma Geçmişi
-              </button>
               <span className="px-3 py-2 text-zinc-700 hidden lg:inline">
                 {userEmail}
               </span>
@@ -163,20 +223,22 @@ export default function Navbar({ onStartChatFromHistory }: Props) {
               </button>
             </>
           ) : (
-            <>
-              <button
-                onClick={() => setModalType("login")}
-                className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
-              >
-                Giriş
-              </button>
-              <button
-                onClick={() => setModalType("register")}
-                className="px-4 py-2 rounded-full bg-zinc-900 text-white hover:bg-zinc-700 transition-colors"
-              >
-                Kayıt Ol
-              </button>
-            </>
+            !isHidden("auth") && (
+              <>
+                <button
+                  onClick={() => setModalType("login")}
+                  className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
+                >
+                  Giriş
+                </button>
+                <button
+                  onClick={() => setModalType("register")}
+                  className="px-4 py-2 rounded-full bg-zinc-900 text-white hover:bg-zinc-700 transition-colors"
+                >
+                  Kayıt Ol
+                </button>
+              </>
+            )
           )}
         </nav>
       </div>

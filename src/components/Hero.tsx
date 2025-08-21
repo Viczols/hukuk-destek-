@@ -75,8 +75,15 @@ export default function Hero() {
     const el = wrapperRef.current;
     if (!el) return;
     const child = el.children[index] as HTMLElement | undefined;
-    child?.scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" });
-  }, [index, inView]);
+      if (child) {
+    const left = child.offsetLeft;
+    if (typeof el.scrollTo === "function") {
+      el.scrollTo({ left, behavior: "smooth" });
+    } else {
+      (el as any).scrollLeft = left;
+    }
+  }
+}, [index, inView]);
 
   return (
     <section

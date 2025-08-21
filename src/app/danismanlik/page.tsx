@@ -5,7 +5,18 @@ export default function DanismanlikPage() {
   return (
     
     <>
-      <Navbar /> {/* ✅ Navbar en üstte görünecek */}
+            <Navbar
+        variant="consulting"
+        hideLinks={["paketler","blog","danismanlik"]} // istersen ["blog","sss","panel"] vs. ekleyebilirsin
+        extraRight={
+          <a
+            href="#avukatlar"
+            className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
+          >
+            Avukatlar
+          </a>
+        }
+      />
       <main className="min-h-screen bg-gradient-to-b from-black via-gray-900 to-black text-white">
         {/* HERO */}
         <section className="relative overflow-hidden">

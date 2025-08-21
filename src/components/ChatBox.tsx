@@ -335,16 +335,29 @@ export default function ChatBox({
         gap: 10,
         borderBottom: "1px solid rgba(255,255,255,0.08)",
       },
-      body: {
-        flex: 1,
-        padding: "12px 14px 18px",
-        overflowY: "auto" as const,
-        background: "linear-gradient(180deg,#0b0c11,#0a0b10)",
-        display: "flex",
-        flexDirection: "column" as const,
-        gap: 12,
-        scrollbarWidth: "thin" as const,
-      },
+body: {
+      flex: 1,
+      padding: "14px 16px 20px",
+      overflowY: "auto" as const,
+
+      // 🔹 Daha modern ve hafif "glassy dark" arkaplan
+      backgroundColor: "#10141b",
+      backgroundImage: [
+        // sağ üstten çok hafif parıltı
+        "radial-gradient(1200px 600px at 85% -10%, rgba(255,255,255,0.06), transparent 60%)",
+        // sol alttan yumuşak parıltı
+        "radial-gradient(800px 400px at -10% 110%, rgba(255,255,255,0.05), transparent 60%)",
+        // alttan üste doğru hafif ton farkı
+        "linear-gradient(180deg, #10141b 0%, #151a24 100%)"
+      ].join(", "),
+      // hafif iç gölge: içerik panelini çerçeveler
+      boxShadow: "inset 0 1px 0 rgba(255,255,255,0.05), inset 0 0 40px rgba(0,0,0,0.25)",
+
+      display: "flex",
+      flexDirection: "column" as const,
+      gap: 12,
+      scrollbarWidth: "thin" as const,
+    },
 
       rowUser: {
         alignSelf: "stretch",
@@ -377,13 +390,13 @@ export default function ChatBox({
         wordBreak: "break-word" as const,
       },
       bubbleUser: {
-        background: "#ffffff",
+        background: "rgba(160, 167, 236, 0.8)", // açık mavi (lightblue) yarı saydam
         border: "1px solid rgba(0,0,0,0.08)",
         color: "#0f1115",
         boxShadow: "0 6px 18px rgba(0,0,0,0.12)",
       },
       bubbleExpert: {
-        background: "#ffffff",
+        background: "rgba(245, 245, 245, 0.9)", // açık gri
         border: "1px solid rgba(0,0,0,0.08)",
         color: "#0f1115",
         boxShadow: "0 6px 18px rgba(0,0,0,0.12)",
