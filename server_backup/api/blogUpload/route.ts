@@ -3,7 +3,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { adminBucket, adminApp } from "../../../lib/firebaseAdmin"; // firebaseAdmin'i bozma, sadece import et
+import { adminBucket, adminApp } from "../../../src/lib/firebaseAdmin"; // firebaseAdmin'i bozma, sadece import et
 import { getAuth } from "firebase-admin/auth";
 
 function slugify(s: string) {

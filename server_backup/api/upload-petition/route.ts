@@ -1,7 +1,7 @@
 // src/app/api/upload-petition/route.ts
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { adminDb, adminBucket } from "../../../lib/firebaseAdmin";
+import { adminDb, adminBucket } from "../../../src/lib/firebaseAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

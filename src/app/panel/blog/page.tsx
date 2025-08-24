@@ -26,9 +26,9 @@ import {
 } from "firebase/storage";
 
 /* ===================== Firebase tekil referanslar ===================== */
-export const db = getFirestore();
-export const storage = getStorage();
-export const auth = getAuth();
+ const db = getFirestore();
+ const storage = getStorage();
+ const auth = getAuth();
 
 /* =============================== Helpers ============================== */
 function slugify(input: string) {

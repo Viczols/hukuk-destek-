@@ -2,7 +2,7 @@ import { NextApiRequest, NextApiResponse } from "next";
 import Iyzipay from "iyzipay";
 
 // 🔽 Admin SDK: alias yoksa yolu relative yap: "../../lib/firebaseAdmin"
-import { adminDb, adminRtdb, AdminFs, Admin } from "../../../lib/firebaseAdmin";
+import { adminDb, adminRtdb, AdminFs, Admin } from "../../../src/lib/firebaseAdmin";
 
 // --- ESKİ client SDK importları artık gereksiz ---
 // import { dbFirestore } from "../../../firebase/config";

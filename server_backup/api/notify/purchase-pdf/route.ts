@@ -1,7 +1,7 @@
 // src/app/api/purchases/[purchaseId]/complete/route.ts
 import { NextResponse } from "next/server";
-import { adminDb, adminBucket } from "../../../../lib/firebaseAdmin";
-import { sendEmail } from "../../../../pages/api/sendEmail";
+import { adminDb, adminBucket } from "../../../../src/lib/firebaseAdmin";
+import { sendEmail } from "../../../../server_backup/api/sendEmail";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

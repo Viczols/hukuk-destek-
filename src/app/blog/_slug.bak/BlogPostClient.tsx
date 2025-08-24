@@ -1,8 +1,7 @@
-// src/app/blog/[slug]/page.tsx
+// src/app/blog/[slug]/BlogPostClient.tsx
 "use client";
 
-import React from "react";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import {
@@ -12,32 +11,43 @@ import {
   where,
   orderBy,
   limit,
-  getDocs
+  getDocs,
 } from "firebase/firestore";
-import { BlogPost } from "../../../types/blog";
 
-export default function BlogPostPage({
-  params,
-}: {
-  params: Promise<{ slug: string }>;
-}) {
-  const { slug } = React.use(params); // <-- Next 15: params Promise, burada unwrap ediyoruz
+type BlogPost = {
+  id: string;
+  title: string;
+  slug: string;
+  coverUrl?: string;
+  tags?: string[];
+  content?: string;
+  publishedAt?: number;
+  publishedAtText?: string;
+  status?: string;
+};
 
+export default function BlogPostClient({ slug }: { slug: string }) {
   const db = getFirestore();
   const [post, setPost] = useState<BlogPost | null>(null);
   const [others, setOthers] = useState<BlogPost[]>([]);
 
   useEffect(() => {
     (async () => {
-      // esas yazı
-      const q1 = query(collection(db, "posts"), where("slug", "==", slug), limit(1));
+      // Esas yazı
+      const q1 = query(
+        collection(db, "posts"),
+        where("slug", "==", slug),
+        limit(1)
+      );
       const s1 = await getDocs(q1);
       if (!s1.empty) {
         const d = s1.docs[0];
         const data = d.data() as any;
         const publishedAtText = data.publishedAt
           ? new Intl.RelativeTimeFormat("tr", { numeric: "auto" }).format(
-              Math.round((data.publishedAt - Date.now()) / (1000 * 60 * 60 * 24)),
+              Math.round(
+                (data.publishedAt - Date.now()) / (1000 * 60 * 60 * 24)
+              ),
               "day"
             )
           : "";
@@ -46,7 +56,7 @@ export default function BlogPostPage({
         setPost(null);
       }
 
-      // diğerleri
+      // Diğer yazılar
       const q2 = query(
         collection(db, "posts"),
         where("status", "==", "published"),
@@ -60,7 +70,9 @@ export default function BlogPostPage({
           const data = d.data() as any;
           const publishedAtText = data.publishedAt
             ? new Intl.RelativeTimeFormat("tr", { numeric: "auto" }).format(
-                Math.round((data.publishedAt - Date.now()) / (1000 * 60 * 60 * 24)),
+                Math.round(
+                  (data.publishedAt - Date.now()) / (1000 * 60 * 60 * 24)
+                ),
                 "day"
               )
             : "";
@@ -75,8 +87,13 @@ export default function BlogPostPage({
       <main className="min-h-screen bg-gradient-to-b from-zinc-950 via-zinc-900 to-zinc-900 text-zinc-100">
         <div className="max-w-3xl mx-auto px-4 py-16">
           <h1 className="text-2xl font-semibold">Yazı bulunamadı</h1>
-          <p className="text-zinc-400 mt-2">Aradığınız yazı kaldırılmış ya da taşınmış olabilir.</p>
-          <Link href="/#blog" className="mt-6 inline-block rounded-full bg-white text-zinc-900 px-4 py-2 hover:bg-zinc-200 transition">
+          <p className="text-zinc-400 mt-2">
+            Aradığınız yazı kaldırılmış ya da taşınmış olabilir.
+          </p>
+          <Link
+            href="/#blog"
+            className="mt-6 inline-block rounded-full bg-white text-zinc-900 px-4 py-2 hover:bg-zinc-200 transition"
+          >
             Blog’a dön
           </Link>
         </div>
@@ -89,18 +106,28 @@ export default function BlogPostPage({
       <div className="max-w-6xl mx-auto px-4 py-12 md:py-16">
         <div className="grid md:grid-cols-[2fr_1fr] gap-8 lg:gap-12">
           <article>
-            <Link href="/#blog" className="text-sm text-zinc-400 hover:text-zinc-200 transition">
+            <Link
+              href="/#blog"
+              className="text-sm text-zinc-400 hover:text-zinc-200 transition"
+            >
               ← Blog’a dön
             </Link>
 
             <h1 className="mt-3 text-3xl md:text-4xl font-semibold tracking-tight text-white">
               {post.title}
             </h1>
-            <div className="mt-2 text-sm text-zinc-400">{post.publishedAtText}</div>
+            <div className="mt-2 text-sm text-zinc-400">
+              {post.publishedAtText}
+            </div>
 
             {post.coverUrl && (
               <div className="relative mt-6 aspect-[16/9] overflow-hidden rounded-2xl border border-white/10 bg-white/5 backdrop-blur">
-                <Image src={post.coverUrl} alt={post.title} fill className="object-cover" />
+                <Image
+                  src={post.coverUrl}
+                  alt={post.title}
+                  fill
+                  className="object-cover"
+                />
               </div>
             )}
 
@@ -123,7 +150,9 @@ export default function BlogPostPage({
           </article>
 
           <aside className="md:sticky md:top-24 h-max">
-            <h3 className="text-lg font-semibold mb-3 text-white">Diğer Yazılar</h3>
+            <h3 className="text-lg font-semibold mb-3 text-white">
+              Diğer Yazılar
+            </h3>
             <div className="space-y-3">
               {others.map((p) => (
                 <Link
@@ -133,14 +162,25 @@ export default function BlogPostPage({
                 >
                   <div className="relative w-20 h-14 shrink-0 overflow-hidden rounded-lg">
                     {p.coverUrl ? (
-                      <Image src={p.coverUrl} alt={p.title} fill className="object-cover" />
+                      <Image
+                        src={p.coverUrl}
+                        alt={p.title}
+                        fill
+                        className="object-cover"
+                      />
                     ) : (
-                      <div className="absolute inset-0 grid place-items-center text-zinc-400">—</div>
+                      <div className="absolute inset-0 grid place-items-center text-zinc-400">
+                        —
+                      </div>
                     )}
                   </div>
                   <div className="min-w-0">
-                    <div className="text-sm font-medium text-zinc-100 line-clamp-2">{p.title}</div>
-                    <div className="text-xs text-zinc-400 mt-0.5">{p.publishedAtText}</div>
+                    <div className="text-sm font-medium text-zinc-100 line-clamp-2">
+                      {p.title}
+                    </div>
+                    <div className="text-xs text-zinc-400 mt-0.5">
+                      {p.publishedAtText}
+                    </div>
                   </div>
                 </Link>
               ))}
