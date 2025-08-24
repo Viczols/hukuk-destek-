@@ -11,6 +11,7 @@ import LoginForm from "./LoginForm";
 import RegisterForm from "./RegisterForm";
 import PurchaseHistoryModal from "./PurchaseHistoryModal";
 import { usePathname } from "next/navigation";
+import Link from "next/link"; // ✅ Link import edildi
 
 type HideKey =
   | "danismanlik"
@@ -23,17 +24,9 @@ type HideKey =
 
 type Props = {
   onStartChatFromHistory?: (purchaseId: string) => void;
-
-  /** Varsayılan: "default". "consulting" -> Online Danışmanlık butonu hafif highlight */
   variant?: "default" | "consulting";
-
-  /** Sayfa bazlı link gizleme */
   hideLinks?: HideKey[];
-
-  /** Solda ekstra içerik (rozet/geri butonu gibi) */
   extraLeft?: React.ReactNode;
-
-  /** Sağda ekstra içerik (CTA gibi) */
   extraRight?: React.ReactNode;
 };
 
@@ -49,7 +42,7 @@ export default function Navbar({
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [isLawyer, setIsLawyer] = useState(false);
   const pathname = usePathname();
-  const showGlow = variant === "consulting" || pathname === "/"; // anasayfada hep açık
+  const showGlow = variant === "consulting" || pathname === "/";
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -93,7 +86,6 @@ export default function Navbar({
 
   const isHidden = (k: HideKey) => hideLinks.includes(k);
 
-  // Online Danışmanlık düğmesinin sınıfı (mevcut stil + consulting varyantında minimal glow)
   const consultingClass =
     variant === "consulting"
       ? `
@@ -118,21 +110,19 @@ export default function Navbar({
       <div className="max-w-6xl mx-auto px-4 h-16 flex justify-between items-center">
         {/* Sol taraf (Logo + optional extraLeft) */}
         <div className="flex items-center gap-3">
-          <a
+          <Link
             href="/"
             className="text-xl font-semibold tracking-tight text-zinc-900"
           >
             HukukDestek
-          </a>
-
-          {extraLeft /* sayfa özel ekler */}
+          </Link>
+          {extraLeft}
         </div>
 
         {/* NAV */}
         <nav className="hidden md:flex items-center gap-2 text-sm">
-          {/* Online Danışmanlık - en başta ve farklı stil (gizlenebilir) */}
           {!isHidden("danismanlik") && (
-            <a href="/danismanlik" className={consultingClass}>
+            <Link href="/danismanlik" className={consultingClass}>
               {showGlow && (
                 <span
                   className="
@@ -158,7 +148,7 @@ export default function Navbar({
                 </svg>
                 <span>Online Danışmanlık</span>
               </span>
-            </a>
+            </Link>
           )}
 
           {!isHidden("paketler") && (
@@ -189,18 +179,16 @@ export default function Navbar({
           )}
 
           {isLawyer && !isHidden("panel") && (
-            <a
+            <Link
               href="/panel"
               className="px-3 py-2 rounded-full hover:bg-zinc-100 transition-colors"
             >
               Panel
-            </a>
+            </Link>
           )}
 
-          {/* Sağ yana sayfa özel CTA/öğe koymak için */}
           {extraRight}
 
-          {/* Hesap / Auth modülleri */}
           {!isHidden("history") && userEmail && (
             <button
               onClick={() => setShowHistoryModal(true)}
