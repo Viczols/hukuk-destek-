@@ -1,40 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
-export default function PaymentSuccess() {
-  const [status, setStatus] = useState("Ödemeniz doğrulanıyor...");
+export default function SuccessPage() {
   const router = useRouter();
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const token = params.get("token");
-
-    if (!token) {
-      setStatus("Ödeme doğrulama hatası: Token bulunamadı.");
-      setTimeout(() => router.push("/"), 3000);
-      return;
-    }
-
-    setStatus("Satın alma talebiniz başarıyla alındı.");
-
-    // ✅ pendingPurchaseType'ı al ve purchaseSuccess'a doğru tipte yaz
+    // Ana sayfada göstereceğin modal bilgisi vs.
     const pending = localStorage.getItem("pendingPurchaseType");
-    const normalized =
-      pending === "dilekce" || pending === "uzman" ? pending : null;
+    const normalized = pending === "dilekce" || pending === "uzman" ? pending : null;
+    localStorage.setItem("purchaseSuccess", JSON.stringify({ shown: false, type: normalized }));
 
-    localStorage.setItem(
-      "purchaseSuccess",
-      JSON.stringify({ shown: false, type: normalized })
-    );
+    // Temizlik
     localStorage.removeItem("pendingPurchaseType");
+    localStorage.removeItem("checkoutHtml");
 
-    const timeout = setTimeout(() => {
-      router.push("/");
-    }, 3000);
-
-    return () => clearTimeout(timeout);
+    const t = setTimeout(() => router.push("/"), 2500);
+    return () => clearTimeout(t);
   }, [router]);
 
   return (
@@ -43,8 +26,8 @@ export default function PaymentSuccess() {
         style={{
           background: "white",
           padding: "60px",
-          borderRadius: "4px",
-          boxShadow: "0 2px 3px #C8D0D8",
+          borderRadius: "12px",
+          boxShadow: "0 8px 30px rgba(0,0,0,.06)",
           display: "inline-block",
           margin: "0 auto",
         }}
@@ -73,7 +56,7 @@ export default function PaymentSuccess() {
         <h1
           style={{
             color: "#88B04B",
-            fontFamily: "'Nunito Sans', 'Helvetica Neue', sans-serif",
+            fontFamily: "'Nunito Sans','Helvetica Neue',sans-serif",
             fontWeight: 900,
             fontSize: "40px",
             marginBottom: "10px",
@@ -84,22 +67,23 @@ export default function PaymentSuccess() {
         <p
           style={{
             color: "#404F5E",
-            fontFamily: "'Nunito Sans', 'Helvetica Neue', sans-serif",
+            fontFamily: "'Nunito Sans','Helvetica Neue',sans-serif",
             fontSize: "20px",
-            margin: "0",
+            margin: 0,
           }}
         >
-          {status}
+          Ödemeniz onaylandı. Ana sayfaya yönlendiriliyorsunuz…
         </p>
+
         <button
           onClick={() => router.push("/")}
           style={{
-            marginTop: "25px",
+            marginTop: "24px",
             backgroundColor: "#88B04B",
             color: "#fff",
             padding: "10px 20px",
             border: "none",
-            borderRadius: "4px",
+            borderRadius: "8px",
             cursor: "pointer",
             fontSize: "16px",
           }}

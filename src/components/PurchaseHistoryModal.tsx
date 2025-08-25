@@ -4,8 +4,20 @@
 import React, { useEffect, useRef, useState } from "react";
 import Modal from "./Modal";
 import { auth, dbRealtime } from "../firebase/config";
-import { getFirestore, collection, query, where, getDocs, orderBy } from "firebase/firestore";
-import { ref, onValue } from "firebase/database";
+import {
+  getFirestore,
+  collection,
+  query,
+  where,
+  getDocs,
+  orderBy,
+  // ticket oluşturmak için
+  doc,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+} from "firebase/firestore";
+import { ref as rtdbRef, onValue, set as rtdbSet } from "firebase/database";
 
 interface Props {
   isOpen: boolean;
@@ -16,12 +28,92 @@ interface Props {
 interface Purchase {
   id: string;
   type: string;          // productKey veya legacy type
-  status: string;        // completed / pending / ...
+  status: string;        // completed / pending / ... (TR değerler de gelebilir)
   createdAt: number;
   productType?: string;
   storagePath?: string;
   downloadUrl?: string;
 }
+
+/* ------------------------------------------------------------------
+   YARDIMCI: Timestamp/Date/number -> ms
+-------------------------------------------------------------------*/
+function toMillis(v: any): number {
+  if (!v) return 0;
+  if (typeof v === "number") return v;
+  if (typeof v?.toMillis === "function") return v.toMillis();
+  if (typeof v?.toDate === "function") {
+    try {
+      return v.toDate().getTime();
+    } catch {}
+  }
+  if (typeof v?.seconds === "number") return v.seconds * 1000;
+  return 0;
+}
+
+/* ------------------------------------------------------------------
+   YARDIMCI: Türkçe/İngilizce durumları tek tipe çevir
+-------------------------------------------------------------------*/
+type NormalizedStatus = "pending" | "completed" | "failed";
+
+function normalizeStatus(raw?: string): NormalizedStatus {
+  const s = (raw || "").toLowerCase().trim();
+
+  // Pending (beklemede/hazırlanıyor/processing vs.)
+  if (
+    [
+      "pending",
+      "beklemede",
+      "hazırlanıyor",
+      "hazirlaniyor",
+      "hazirlanıyor",
+      "processing",
+      "created",
+      "open",
+      "awaiting_payment",
+      "awaiting",
+    ].includes(s)
+  ) {
+    return "pending";
+  }
+
+  // Completed (ödendi / tamamlandı / başarılı)
+  if (
+    [
+      "completed",
+      "paid",
+      "success",
+      "başarılı",
+      "basarili",
+      "tamamlandı",
+      "tamamlandi",
+      "ödendi",
+      "odendi",
+      "done",
+    ].includes(s)
+  ) {
+    return "completed";
+  }
+
+  // Failed / iptal / başarısız
+  if (
+    ["failed", "error", "iptal", "canceled", "cancelled", "başarısız", "basarisiz", "refused"].includes(s)
+  ) {
+    return "failed";
+  }
+
+  // ⚠️ Varsayılanı "pending" yap (güvenli)
+  return "pending";
+}
+
+function statusLabelTr(norm: NormalizedStatus, isAI: boolean) {
+  if (norm === "pending") return isAI ? "hazırlanıyor" : "beklemede";
+  if (norm === "completed") return "tamamlandı";
+  if (norm === "failed") return "başarısız";
+  return "beklemede";
+}
+
+/* ------------------------------------------------------------------*/
 
 export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: Props) {
   const [purchases, setPurchases] = useState<Purchase[]>([]);
@@ -35,7 +127,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
 
   // --- Realtime: online uzman
   useEffect(() => {
-    const lawyersRef = ref(dbRealtime, "lawyers");
+    const lawyersRef = rtdbRef(dbRealtime, "lawyers");
     const unsubscribe = onValue(lawyersRef, (snap) => {
       if (!snap.exists()) return setOnlineLawyerCount(0);
       const data = snap.val() || {};
@@ -45,7 +137,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
     return () => unsubscribe();
   }, []);
 
-  // --- Firestore: purchases
+  // --- Firestore: purchases (ORDER BY createdAt!)
   useEffect(() => {
     const fetchPurchases = async () => {
       if (!auth.currentUser) return;
@@ -53,7 +145,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
       const q = query(
         collection(db, "purchases"),
         where("userId", "==", auth.currentUser.uid),
-        orderBy("date", "desc")
+        orderBy("createdAt", "desc") // <-- düzeltme: createdAt
       );
       const snapshot = await getDocs(q);
       const list: Purchase[] = snapshot.docs.map((d) => {
@@ -61,8 +153,8 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
         return {
           id: d.id,
           type: data.productKey || data.type || "dilekce",
-          status: data.status || "completed",
-          createdAt: data.date?.toDate?.()?.getTime?.() ?? 0,
+          status: data.status ?? "pending", // <-- düzeltme: default 'pending'
+          createdAt: toMillis(data.createdAt), // <-- düzeltme: createdAt kullan
           productType: data.productType || "",
           storagePath: data.storagePath || "",
           downloadUrl: data.downloadUrl || "",
@@ -80,14 +172,68 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
     setFormattedDates(mapping);
   }, [purchases]);
 
+  // --- (YENİ) Sohbet için ticket oluştur/garanti et
+  async function ensureTicketForPurchase(purchaseId: string) {
+    if (!auth.currentUser) throw new Error("Oturum bulunamadı.");
+    const db = getFirestore();
+
+    // Satın alma dokümanını oku (kuyruk kaydı için bazı alanları kullanacağız)
+    const pRef = doc(db, "purchases", purchaseId);
+    const pSnap = await getDoc(pRef);
+    if (!pSnap.exists()) throw new Error("Satın alma bulunamadı.");
+    const pdata: any = pSnap.data() || {};
+    const userId = pdata.userId || auth.currentUser.uid;
+    const productKey = pdata.productKey || pdata.type || "uzman";
+    const productType = pdata.productType || (productKey === "uzman" ? "Uzman Yardımıyla Dilekçe" : "");
+
+    // Firestore tickets/{purchaseId} - waiting kuyruğuna koy (mevcut panelde alternatif)
+    const tRef = doc(db, "tickets", purchaseId);
+    await setDoc(
+      tRef,
+      {
+        purchaseId,
+        userId,
+        productKey,
+        productType,
+        status: "waiting",
+        assignedLawyerId: null,
+        lastMessageAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    // (Opsiyonel) RTDB tarafı da varsa anında görünsün
+    try {
+      await rtdbSet(rtdbRef(dbRealtime, `tickets/${purchaseId}`), {
+        purchaseId,
+        userId,
+        productKey,
+        productType,
+        status: "waiting",
+        assignedLawyerId: null,
+        createdAt: Date.now(),
+      });
+    } catch {
+      // RTDB yoksa sessiz geç
+    }
+  }
+
   // --- Chat
-  const handleStartChat = (pid: string) => {
+  const handleStartChat = async (pid: string) => {
     if (onlineLawyerCount === 0) {
       alert("Şu anda çevrim içi uzman bulunmuyor. Hafta içi 09:00–18:00 arasında tekrar deneyebilirsiniz.");
       return;
     }
-    onStartChat?.(pid);
-    onClose();
+    try {
+      await ensureTicketForPurchase(pid);
+      onStartChat?.(pid);
+      onClose();
+    } catch (err: any) {
+      console.error(err);
+      alert(`Sohbet başlatılamadı: ${err?.message || "bilinmeyen hata"}`);
+    }
   };
 
   // --- PDF Upload
@@ -156,15 +302,20 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
         {purchases.length === 0 ? (
           <p className="text-center text-zinc-400 py-10">Henüz satın aldığınız bir paket bulunmuyor.</p>
         ) : (
-          <div className={`${enableScroll ? "max-h-[460px] overflow-y-auto pr-1 custom-scrollbar-dark" : ""} px-4 py-2`}>
+          <div className={`${enableScroll ? "max-h-[460px] overflow-y-auto pr-1 custom-scrollbar-dark" : ""} px-4 py-2`}> 
             <ul className="divide-y divide-white/10">
               {purchases.map((p) => {
                 const key = (p.type || "").toLowerCase(); // "dilekce" | "uzman" | "gorusme"
                 const isAI = key === "dilekce";
                 const isUzman = key === "uzman";
                 const isGorusme = key === "gorusme";
-                const isCompleted = p.status === "completed";
-                const isPending = p.status === "pending";
+
+                // --- durumları normalize et
+                const norm = normalizeStatus(p.status);
+                const isCompleted = norm === "completed";
+                const isPending = norm === "pending";
+                const isFailed = norm === "failed";
+                const statusText = statusLabelTr(norm, isAI);
 
                 const title =
                   isGorusme
@@ -184,12 +335,12 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
                         Durum:{" "}
                         <span
                           className={
-                            isCompleted ? "text-emerald-300" : isPending ? "text-amber-300" : "text-zinc-300"
+                            isCompleted ? "text-emerald-300" : isPending ? "text-amber-300" : isFailed ? "text-rose-300" : "text-zinc-300"
                           }
                         >
-                          {isAI && isPending ? "hazırlanıyor" : p.status}
+                          {statusText}
                         </span>{" "}
-                        • Tarih: {formattedDates[p.id] || "-"}
+                        • Tarih: {p.createdAt ? new Date(p.createdAt).toLocaleString() : "-"}
                       </p>
 
                       {/* PDF indir: sadece downloadUrl varsa göster */}
@@ -219,7 +370,6 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
                           Tamamlandı
                         </span>
                       )}
-
 
                       {/* Görüşme/Uzman paketi için sohbet */}
                       {isPending && (isGorusme || isUzman) && (

@@ -1,5 +1,5 @@
-// src/firebase/purchaseService.js  (konuma göre yolu ayarla)
-import { dbFirestore, dbRealtime } from "./config"; // <-- yolu projene göre düzelt
+// src/firebase/purchaseService.js
+import { dbFirestore /*, dbRealtime*/ } from "./config";
 import {
   collection,
   addDoc,
@@ -9,16 +9,12 @@ import {
   orderBy,
   serverTimestamp as fsServerTimestamp,
 } from "firebase/firestore";
-import {
-  ref as rRef,
-  set as rSet,
-  serverTimestamp as rtdbServerTimestamp,
-} from "firebase/database";
+// import { ref as rRef, set as rSet, serverTimestamp as rtdbServerTimestamp } from "firebase/database";
 
-// Satın alma kaydet
+// Satın alma kaydet (SADECE Firestore, status: 'pending')
 export const savePurchase = async (
   userId,
-  productType,   // Görsel isim (örn: 'Uzman Yardımıyla Dilekçe Yazımı')
+  productType,   // 'Uzman Yardımıyla Dilekçe Yazımı' vs.
   productKey,    // 'dilekce' | 'uzman' | 'gorusme'
   price,
   paymentId,
@@ -33,23 +29,12 @@ export const savePurchase = async (
       price,
       paymentId,
       token,
-      createdAt: fsServerTimestamp(), // <-- tek doğrusal alan
+      createdAt: fsServerTimestamp(),
     });
 
-    // Görüşme/Uzman ise RTDB'de chat ticket aç
-    if (productKey === "gorusme" || productKey === "uzman") {
-      const tRef = rRef(dbRealtime, `chatTickets/${docRef.id}`);
-      await rSet(tRef, {
-        userId,
-        purchaseId: docRef.id,
-        type: productKey,
-        status: "open",    // open -> active -> closed
-        assignedLawyer: null,
-        createdAt: rtdbServerTimestamp(),
-      });
-    }
+    // ❌ ESKİ: ödeme öncesi RTDB ticket açma
+    // if (productKey === "gorusme" || productKey === "uzman") { ... }
 
-    console.log("✅ Firestore'a satın alma kaydedildi:", productKey);
     return { ok: true, id: docRef.id };
   } catch (error) {
     console.error("⚠️ Firestore kayıt hatası:", error);
@@ -57,7 +42,6 @@ export const savePurchase = async (
   }
 };
 
-// Satın alma geçmişi
 export const getPurchaseHistory = async (userId) => {
   try {
     const q = query(

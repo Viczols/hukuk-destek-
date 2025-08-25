@@ -1,4 +1,3 @@
-// src/components/Packages.tsx
 "use client";
 
 import { useState, useEffect } from "react";
@@ -9,17 +8,19 @@ import Modal from "./Modal";
 import LoginForm from "./LoginForm";
 import RegisterForm from "./RegisterForm";
 
+const BASE = process.env.NEXT_PUBLIC_FUNCTIONS_BASE!; // <-- Cloud Functions URL'i
+
 export default function Packages() {
-  const [selectedType, setSelectedType] = useState<null | "dilekce" | "uzman">(null);
+  const [selectedType, setSelectedType] = useState<null | "dilekce" | "uzman">(
+    null
+  );
   const [modalType, setModalType] = useState<null | "login" | "register">(null);
   const [noLawyerModal, setNoLawyerModal] = useState(false);
   const [onlineLawyerCount, setOnlineLawyerCount] = useState(0);
 
-  // UI’de görünen fiyatlar (mevcut ödeme akışınla uyumlu)
-  const dilekcePrice = 152;   // ₺
-  const uzmanPrice   = 2001;  // ₺
+  const dilekcePrice = 152;
+  const uzmanPrice = 2001;
 
-  // RTDB timestamp normalize
   const toMillis = (v: any): number => {
     if (typeof v === "number") return v;
     if (v && typeof v.toMillis === "function") return v.toMillis();
@@ -40,7 +41,7 @@ export default function Packages() {
         const isOnline = lawyer?.isOnline === true;
         const hb = toMillis(lawyer?.heartbeatAt);
         const ls = toMillis(lawyer?.lastSeen);
-        const fresh = (now - hb) < 120_000 || (now - ls) < 120_000;
+        const fresh = now - hb < 120_000 || now - ls < 120_000;
         return isOnline && fresh;
       }).length;
       setOnlineLawyerCount(count);
@@ -54,7 +55,10 @@ export default function Packages() {
     setNoLawyerModal(false);
   };
 
-  const startPayment = async (type: "gorusme" | "dilekce" | "uzman", price: number) => {
+  const startPayment = async (
+    type: "gorusme" | "dilekce" | "uzman",
+    price: number
+  ) => {
     const user = auth.currentUser;
 
     if (!user) {
@@ -68,7 +72,11 @@ export default function Packages() {
       return;
     }
 
-    localStorage.setItem("pendingPurchaseType", type === "dilekce" ? "dilekce" : "uzman");
+    // success ekranında hangi modalı göstereceğini bilsin
+    localStorage.setItem(
+      "pendingPurchaseType",
+      type === "dilekce" ? "dilekce" : "uzman"
+    );
 
     try {
       const productName =
@@ -78,7 +86,8 @@ export default function Packages() {
           ? "Uzman Yardımıyla Dilekçe Yazımı"
           : "Dilekçe Paketi";
 
-      const response = await fetch("/api/payment/create-session", {
+      // ⬇ Artık Cloud Functions'a gidiyoruz
+      const res = await fetch(`${BASE}/createSession`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -86,17 +95,42 @@ export default function Packages() {
           name: user.email?.split("@")[0],
           userId: user.uid,
           productType: productName,
-          productKey: type,
+          productKey: type, // "gorusme" | "dilekce" | "uzman"
           price,
+          returnBase: window.location.origin,
         }),
       });
 
-      const data = await response.json();
+      const data = await res.json();
+
+      // 1) Iyzico'dan "paymentPageUrl" geliyorsa direkt oraya git
       if (data?.paymentPageUrl) {
         window.location.href = data.paymentPageUrl;
-      } else {
-        alert("Ödeme başlatılamadı: " + (data.errorMessage || data.message || "Bilinmeyen hata"));
+        return;
       }
+
+      // 2) HTML döndüyse (mock ya da iyzico formu) -> aynı sekmede bas
+      if (data?.ok && data?.html) {
+        const w = window.open("", "_self");
+        if (w && w.document) {
+          w.document.open();
+          w.document.write(data.html); // <-- artık geniş wrapper'lı
+          w.document.close();
+        } else {
+          window.location.href = `/redirect?html=${encodeURIComponent(
+            btoa(data.html)
+          )}`;
+        }
+        return;
+      }
+
+      alert(
+        "Ödeme başlatılamadı: " +
+          (data?.error ||
+            data?.errorMessage ||
+            data?.message ||
+            "Bilinmeyen hata")
+      );
     } catch (err) {
       console.error("Ödeme başlatılırken hata:", err);
       alert("Ödeme sırasında bir hata oluştu.");
@@ -104,7 +138,11 @@ export default function Packages() {
   };
 
   const formatTRY = (n: number) =>
-    new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", maximumFractionDigits: 0 }).format(n);
+    new Intl.NumberFormat("tr-TR", {
+      style: "currency",
+      currency: "TRY",
+      maximumFractionDigits: 0,
+    }).format(n);
 
   return (
     <section
@@ -134,8 +172,12 @@ export default function Packages() {
           <article className="group rounded-2xl border border-white/10 bg-white/5 backdrop-blur p-5 hover:bg-white/10 transition shadow-sm h-full flex flex-col">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-xl font-semibold text-white">🤖 Yapay Zeka ile Dilekçe</h3>
-                <p className="text-sm text-zinc-400 mt-1">Hızlı taslak + uzman bakışı</p>
+                <h3 className="text-xl font-semibold text-white">
+                  🤖 Yapay Zeka ile Dilekçe
+                </h3>
+                <p className="text-sm text-zinc-400 mt-1">
+                  Hızlı taslak + uzman bakışı
+                </p>
               </div>
               {/* Fiyat rozeti */}
               <span className="rounded-full px-3 py-1 bg-white text-zinc-900 text-sm font-medium shadow">
@@ -151,7 +193,9 @@ export default function Packages() {
 
             {/* iyzico güven satırı */}
             <div className="mt-5 flex items-center gap-2 text-xs text-zinc-400">
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded bg-white/10 border border-white/15">🔒</span>
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded bg-white/10 border border-white/15">
+                🔒
+              </span>
               <span>Güvenli ödeme — iyzico altyapısı</span>
             </div>
 
@@ -171,12 +215,16 @@ export default function Packages() {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-xl font-semibold text-white">📄 Uzman Destekli Dilekçe</h3>
+                  <h3 className="text-xl font-semibold text-white">
+                    📄 Uzman Destekli Dilekçe
+                  </h3>
                   <span className="text-[10px] px-2 py-1 rounded-full bg-white/10 border border-white/15 text-zinc-300">
                     En çok tercih edilen
                   </span>
                 </div>
-                <p className="text-sm text-zinc-400 mt-1">Bire bir uzman desteği + yol haritası</p>
+                <p className="text-sm text-zinc-400 mt-1">
+                  Bire bir uzman desteği + yol haritası
+                </p>
               </div>
               {/* Fiyat rozeti */}
               <span className="rounded-full px-3 py-1 bg-white text-zinc-900 text-sm font-medium shadow">
@@ -193,7 +241,9 @@ export default function Packages() {
 
             {/* iyzico güven satırı */}
             <div className="mt-5 flex items-center gap-2 text-xs text-zinc-400">
-              <span className="inline-flex h-5 w-5 items-center justify-center rounded bg-white/10 border border-white/15">🔒</span>
+              <span className="inline-flex h-5 w-5 items-center justify-center rounded bg-white/10 border border-white/15">
+                🔒
+              </span>
               <span>Güvenli ödeme — iyzico altyapısı</span>
             </div>
 
@@ -215,7 +265,8 @@ export default function Packages() {
 
               {onlineLawyerCount === 0 && (
                 <p className="mt-2 text-xs text-center rounded-lg bg-red-500/10 border border-red-400/20 text-red-300 px-3 py-2">
-                  Şu anda çevrim içi uzman bulunmuyor. Uzmanlarımız çoğunlukla <strong>hafta içi 09:00–18:00</strong> arası çevrim içi olur.
+                  Şu anda çevrim içi uzman bulunmuyor. Uzmanlarımız çoğunlukla{" "}
+                  <strong>hafta içi 09:00–18:00</strong> arası çevrim içi olur.
                 </p>
               )}
             </div>
@@ -229,7 +280,10 @@ export default function Packages() {
           isOpen={true}
           onClose={() => setSelectedType(null)}
           onBuyClick={() =>
-            startPayment(selectedType, selectedType === "dilekce" ? dilekcePrice : uzmanPrice)
+            startPayment(
+              selectedType,
+              selectedType === "dilekce" ? dilekcePrice : uzmanPrice
+            )
           }
           type={selectedType}
         />
@@ -254,8 +308,12 @@ export default function Packages() {
       {/* Uzman Yok Modal (korundu) */}
       <Modal isOpen={noLawyerModal} onClose={() => setNoLawyerModal(false)}>
         <div className="text-center p-4">
-          <h2 className="text-xl font-bold text-white mb-1">Şu an çevrim içi uzman bulunmuyor</h2>
-          <p className="text-zinc-300 text-sm">Uygun olduğunda tekrar deneyebilirsiniz.</p>
+          <h2 className="text-xl font-bold text-white mb-1">
+            Şu an çevrim içi uzman bulunmuyor
+          </h2>
+          <p className="text-zinc-300 text-sm">
+            Uygun olduğunda tekrar deneyebilirsiniz.
+          </p>
         </div>
       </Modal>
     </section>

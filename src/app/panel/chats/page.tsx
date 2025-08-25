@@ -1,3 +1,4 @@
+// src/app/panel/chats/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -13,6 +14,7 @@ import {
   orderBy,
   limit as fsLimit,
   getDoc,
+  where,
 } from "firebase/firestore";
 import {
   ref as rRef,
@@ -33,9 +35,9 @@ import { dbFirestore as db, dbRealtime } from "../../../firebase/config";
 /* ================= types & helpers ================= */
 
 type Raw = Record<string, any>;
-type CollName = "chatRequests" | "chatTickets";
+type CollName = "chatRequests" | "chatTickets" | "purchases";
 type ChatReq = {
-  id: string;
+  id: string;                // belge id (purchases için purchaseId)
   purchaseId: string;
   userId: string;
   status: "waiting" | "claimed" | "closed";
@@ -43,12 +45,13 @@ type ChatReq = {
   _src: CollName;
 };
 
-const SOURCES: CollName[] = ["chatRequests", "chatTickets"];
-const waitingSyn = new Set(["waiting", "new", "open", "created", "pending", "unassigned", "queue"]);
-const claimedSyn = new Set(["claimed", "assigned", "in_progress", "accepted", "ongoing", "working"]);
-const closedSyn = new Set(["closed", "done", "resolved", "completed", "finished"]);
+const SOURCES: Exclude<CollName, "purchases">[] = ["chatRequests", "chatTickets"];
+const waitingSyn = new Set(["waiting", "new", "open", "created", "pending", "unassigned", "queue", "beklemede", "hazırlanıyor", "hazirlaniyor", "hazirlanıyor"]);
+const claimedSyn = new Set(["claimed", "assigned", "in_progress", "accepted", "ongoing", "working", "atanmış", "atanmis"]);
+const closedSyn  = new Set(["closed", "done", "resolved", "completed", "finished", "kapalı", "kapali"]);
+const paidSyn    = new Set(["paid", "success", "completed", "tamamlandı", "tamamlandi", "ödendi", "odendi", "başarılı", "basarili"]);
 
-function normalize(id: string, data: Raw, _src: CollName): ChatReq | null {
+function normalize(id: string, data: Raw, _src: Exclude<CollName, "purchases">): ChatReq | null {
   const purchaseId = data.purchaseId ?? data.pid ?? id;
   const userId = data.userId ?? data.uid ?? null;
   const assignedLawyerId = data.assignedLawyerId ?? data.assignedLawyer ?? null;
@@ -64,14 +67,61 @@ function normalize(id: string, data: Raw, _src: CollName): ChatReq | null {
   return { id, purchaseId, userId, status, assignedLawyerId, _src };
 }
 
+// purchases için normalize
+function normalizeFromPurchase(id: string, data: Raw): ChatReq | null {
+  const purchaseId = id;
+  const userId = data.userId ?? null;
+  if (!purchaseId || !userId) return null;
+
+  // Öncelik: chat.status varsa onu kullan
+  const chatStatusRaw: string | undefined = data.chat?.status ? String(data.chat.status).toLowerCase() : undefined;
+  const assignedLawyerId: string | null = data.chat?.assignedLawyerId ?? null;
+
+  if (chatStatusRaw) {
+    if (closedSyn.has(chatStatusRaw)) {
+      return { id, purchaseId, userId, status: "closed", assignedLawyerId, _src: "purchases" };
+    }
+    if (claimedSyn.has(chatStatusRaw)) {
+      return { id, purchaseId, userId, status: "claimed", assignedLawyerId, _src: "purchases" };
+    }
+    if (waitingSyn.has(chatStatusRaw)) {
+      return { id, purchaseId, userId, status: "waiting", assignedLawyerId, _src: "purchases" };
+    }
+  }
+
+  // chat.status yoksa: ödeme paid ise waiting olarak panele sok
+  const payRaw = data.status ? String(data.status).toLowerCase() : "";
+  if (paidSyn.has(payRaw)) {
+    return { id, purchaseId, userId, status: "waiting", assignedLawyerId, _src: "purchases" };
+  }
+
+  // ödenmemiş veya tanımsız ise panel listesine sokmayalım
+  return null;
+}
+
+// Kaynakları tek listeye indirgerken öncelik: chat* > purchases
 function dedupTickets(list: ChatReq[]): ChatReq[] {
-  const map = new Map<string, ChatReq>();
+  const rank = (src: CollName) => (src === "purchases" ? 0 : 1);
+  const map = new Map<string, ChatReq>(); // key: purchaseId
   for (const it of list) {
     const prev = map.get(it.purchaseId);
-    if (!prev) map.set(it.purchaseId, it);
-    else {
-      if (prev.status === "waiting" && it.status === "claimed") map.set(it.purchaseId, it);
-      else if (prev.status === it.status && prev._src === "chatRequests" && it._src === "chatTickets") {
+    if (!prev) {
+      map.set(it.purchaseId, it);
+    } else {
+      // Önce kaynak önceliği
+      if (rank(it._src) > rank(prev._src)) {
+        map.set(it.purchaseId, it);
+        continue;
+      }
+      if (rank(it._src) < rank(prev._src)) {
+        continue; // purchases < chat*
+      }
+      // Aynı kaynak: claimed, waiting'e baskın
+      const order = (s: ChatReq["status"]) => (s === "claimed" ? 2 : s === "waiting" ? 1 : 0);
+      if (order(it.status) > order(prev.status)) {
+        map.set(it.purchaseId, it);
+      } else {
+        // eşitse son gelen kazansın
         map.set(it.purchaseId, it);
       }
     }
@@ -134,9 +184,12 @@ export default function ChatsPage() {
 
   // bekleyen + atanmışları dinle
   useEffect(() => {
-    const unsubs = SOURCES.map((name) => {
+    const unsubs: Array<() => void> = [];
+
+    // 1) chatRequests & chatTickets (mevcut)
+    SOURCES.forEach((name) => {
       const qRef = query(collection(db, name));
-      return onSnapshot(qRef, (snap) => {
+      const u = onSnapshot(qRef, (snap) => {
         const arr: ChatReq[] = [];
         snap.forEach((d) => {
           const n = normalize(d.id, d.data() as Raw, name);
@@ -147,8 +200,33 @@ export default function ChatsPage() {
           return dedupTickets([...others, ...arr]);
         });
       });
+      unsubs.push(u);
     });
-    return () => unsubs.forEach((u) => u());
+
+    // 2) purchases — uzman & gorusme
+    const makePurListener = (productKey: "uzman" | "gorusme") => {
+      const qPur = query(
+        collection(db, "purchases"),
+        where("productKey", "==", productKey),
+        orderBy("date", "desc"),
+        fsLimit(200)
+      );
+      return onSnapshot(qPur, (snap) => {
+        const arr: ChatReq[] = [];
+        snap.forEach((d) => {
+          const n = normalizeFromPurchase(d.id, d.data() as Raw);
+          if (n) arr.push(n);
+        });
+        setAll((prev) => {
+          const others = prev.filter((x) => x._src !== "purchases");
+          return dedupTickets([...others, ...arr]);
+        });
+      });
+    };
+    unsubs.push(makePurListener("uzman"));
+    unsubs.push(makePurListener("gorusme"));
+
+    return () => unsubs.forEach((fn) => fn());
   }, []);
 
   // email’leri toplu çek & önbelleğe koy
@@ -195,8 +273,50 @@ export default function ChatsPage() {
   const claim = async (item: ChatReq) => {
     const uid = auth.currentUser?.uid;
     if (!uid) return alert("Önce giriş yapın.");
-    const docRef = doc(db, item._src, item.id);
 
+    // purchases kaynağı ise chat altına yaz
+    if (item._src === "purchases") {
+      const pRef = doc(db, "purchases", item.id); // id = purchaseId
+      await runTransaction(db, async (tx) => {
+        const snap = await tx.get(pRef);
+        if (!snap.exists()) throw new Error("Satın alma bulunamadı.");
+        const data: any = snap.data() || {};
+        const assigned = data.chat?.assignedLawyerId ?? null;
+        const cstat   = data.chat?.status ? String(data.chat.status).toLowerCase() : undefined;
+
+        const alreadyClaimed = !!assigned || (cstat && claimedSyn.has(cstat));
+        const alreadyClosed  = cstat && closedSyn.has(cstat);
+        if (alreadyClaimed || alreadyClosed) {
+          throw new Error("Bu istek zaten üstlenilmiş.");
+        }
+
+        tx.set(
+          pRef,
+          {
+            chat: {
+              status: "claimed",
+              assignedLawyerId: uid,
+              updatedAt: fsServerTimestamp(),
+              claimedAt: fsServerTimestamp(),
+            },
+          },
+          { merge: true }
+        );
+      });
+
+      try {
+        // RTDB chatTickets aynası (opsiyonel)
+        await rUpdate(rRef(dbRealtime, `chatTickets/${item.purchaseId}`), {
+          assignedLawyer: uid,
+          status: "claimed",
+          updatedAt: Date.now(),
+        });
+      } catch {}
+      return;
+    }
+
+    // eski kaynaklar: top-level alanlara yazar
+    const docRef = doc(db, item._src, item.id);
     await runTransaction(db, async (tx) => {
       const snap = await tx.get(docRef);
       if (!snap.exists()) throw new Error("Kayıt bulunamadı.");
@@ -365,7 +485,7 @@ function PanelChat({
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [rtdbErr, setRtdbErr] = useState<string | null>(null);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(""); // <-- TEK TANIM (hata düzeltildi)
   const listRef = useRef<HTMLDivElement>(null);
 
   // unread & görsel highlight
@@ -396,7 +516,6 @@ function PanelChat({
               setPulse(true);
               setTimeout(() => setPulse(false), 1200);
               setUnread((u) => u + 1);
-              // 🔇 izin hatasını UI'da göstermiyoruz
             }
           }
         });
@@ -512,7 +631,7 @@ function PanelChat({
       () => {}
     );
 
-  return () => {
+    return () => {
       off();
       unsub();
     };
@@ -567,9 +686,7 @@ function PanelChat({
   return (
     <div
       className={[
-        // Gri ağırlıklı ana yüzey
         "overflow-hidden rounded-2xl border border-zinc-300 bg-zinc-100/90 backdrop-blur shadow-sm transition",
-        pulse ? "ring-2 ring-rose-400" : "",
       ].join(" ")}
     >
       <button
@@ -580,7 +697,6 @@ function PanelChat({
           <div className="font-medium text-zinc-900">
             #{purchaseId} <span className="text-zinc-600">• {userIdLabel}</span>
           </div>
-          {/* rtdbErr mevcut olsa bile son kullanıcıya göstermiyoruz */}
         </div>
 
         <div className="flex items-center gap-2">
@@ -607,8 +723,8 @@ function PanelChat({
                 <div
                   className={`max-w-[80%] rounded-2xl px-3 py-2 ${
                     m.role === "lawyer"
-                      ? "bg-zinc-800 text-white"      // siyahı aksan olarak kullan
-                      : "bg-zinc-200 text-zinc-900"   // kullanıcı mesajı: yoğun gri
+                      ? "bg-zinc-800 text-white"
+                      : "bg-zinc-200 text-zinc-900"
                   }`}
                 >
                   <div className="whitespace-pre-wrap">{m.text}</div>
