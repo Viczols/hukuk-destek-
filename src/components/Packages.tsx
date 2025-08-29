@@ -86,7 +86,6 @@ export default function Packages() {
           ? "Uzman Yardımıyla Dilekçe Yazımı"
           : "Dilekçe Paketi";
 
-      // ⬇ Artık Cloud Functions'a gidiyoruz
       const res = await fetch(`${BASE}/createSession`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -101,20 +100,63 @@ export default function Packages() {
         }),
       });
 
-      const data = await res.json();
+      // Ağ hatası
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`Ödeme başlatılamadı: ${txt || res.status}`);
+      }
 
-      // 1) Iyzico'dan "paymentPageUrl" geliyorsa direkt oraya git
-      if (data?.paymentPageUrl) {
+      const data = await res.json();
+      // Beklenen yeni alanlar:
+      // - data.ok: boolean
+      // - data.mode: "redirect" | "embedded"
+      // - redirect ise: data.paymentPageUrl
+      // - embedded ise: data.checkoutFormContent
+      // Geriye dönük uyum:
+      // - eski akışta data.html dönebiliyordu (sarmallanmış)
+
+      if (!data?.ok) {
+        throw new Error(`Ödeme başlatılamadı: ${data?.error || "Bilinmeyen hata"}`);
+      }
+
+      // 1) YENİ: redirect modu
+      if (data.mode === "redirect" && data.paymentPageUrl) {
         window.location.href = data.paymentPageUrl;
         return;
       }
 
-      // 2) HTML döndüyse (mock ya da iyzico formu) -> aynı sekmede bas
+      // 2) YENİ: embedded modu (checkoutFormContent)
+      if (data.mode === "embedded" && data.checkoutFormContent) {
+        // İyziCo içeriğini basmak için basit bir HTML kabuğu
+        const html = `<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Ödeme</title>
+</head>
+<body>
+${data.checkoutFormContent}
+</body>
+</html>`;
+        const w = window.open("", "_self");
+        if (w && w.document) {
+          w.document.open();
+          w.document.write(html);
+          w.document.close();
+        } else {
+          // çok nadir self kapalıysa fallback
+          window.location.href = `/redirect?html=${encodeURIComponent(btoa(html))}`;
+        }
+        return;
+      }
+
+      // 3) ESKİ: html alanı dönerse (geriye dönük destek)
       if (data?.ok && data?.html) {
         const w = window.open("", "_self");
         if (w && w.document) {
           w.document.open();
-          w.document.write(data.html); // <-- artık geniş wrapper'lı
+          w.document.write(data.html);
           w.document.close();
         } else {
           window.location.href = `/redirect?html=${encodeURIComponent(
@@ -124,16 +166,12 @@ export default function Packages() {
         return;
       }
 
-      alert(
-        "Ödeme başlatılamadı: " +
-          (data?.error ||
-            data?.errorMessage ||
-            data?.message ||
-            "Bilinmeyen hata")
-      );
-    } catch (err) {
+      // Hiçbiri yoksa:
+      console.error("createSession response:", data);
+      throw new Error("Ödeme başlatılamadı: Bilinmeyen hata");
+    } catch (err: any) {
       console.error("Ödeme başlatılırken hata:", err);
-      alert("Ödeme sırasında bir hata oluştu.");
+      alert(err?.message || "Ödeme sırasında bir hata oluştu.");
     }
   };
 
@@ -161,7 +199,7 @@ export default function Packages() {
           <h2 className="text-3xl md:text-4xl font-semibold tracking-tight text-white">
             Uzman Ekip — Net Süreç — Güvenli Ödeme
           </h2>
-          <p className="mt-2 text-zinc-300">
+        <p className="mt-2 text-zinc-300">
             Baroya kayıtlı uzmanlarla, şeffaf fiyat ve iyzico güvencesi.
           </p>
         </header>

@@ -1,5 +1,7 @@
+// /api/payment/create-session.ts
 import { NextApiRequest, NextApiResponse } from "next";
 import Iyzipay from "iyzipay";
+import { adminDb, AdminFs } from "../../../src/lib/firebaseAdmin"; // yolu projene göre düzelt
 
 const iyzipay = new Iyzipay({
   apiKey: process.env.IYZICO_API_KEY!,
@@ -8,78 +10,54 @@ const iyzipay = new Iyzipay({
 });
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ message: "Method Not Allowed" });
-  }
+  if (req.method !== "POST") return res.status(405).json({ message: "Method Not Allowed" });
 
   try {
     const { email, name, userId, productType, productKey, price } = req.body;
 
-    console.log("📥 [CREATE-SESSION] Body:", req.body);
+    // 1) Intent dokümanı oluştur (UI geçmişinde görünmeyecek)
+    const intentRef = await adminDb.collection("paymentIntents").add({
+      userId,
+      email,
+      name,
+      productType,
+      productKey,
+      price,
+      status: "initiated",                  // initiated | paid | failed
+      createdAt: AdminFs.FieldValue.serverTimestamp(),
+    });
 
-    // ✅ Iyzico ödeme formu isteği
+    // 2) Iyzico request hazırla (aynı mantık sende var)
     const request = {
       locale: Iyzipay.LOCALE.TR,
-      conversationId: String(Date.now()),
+      conversationId: intentRef.id,        // intentId'yi conversationId olarak set et
       price: String(price),
       paidPrice: String(price),
       currency: Iyzipay.CURRENCY.TRY,
-      basketId: "B67832",
+      installment: "1",
+      basketId: productKey,
       paymentGroup: Iyzipay.PAYMENT_GROUP.PRODUCT,
-      callbackUrl: `${process.env.NEXT_PUBLIC_BASE_URL}/api/payment/callback?userId=${userId}&type=${encodeURIComponent(productType)}&productKey=${productKey}`,
-      buyer: {
-        id: userId,
-        name: name,
-        surname: "Kullanıcı",
-        gsmNumber: "+905350000000",
-        email: email,
-        identityNumber: "74300864791",
-        registrationAddress: "İstanbul Türkiye",
-        city: "İstanbul",
-        country: "Türkiye",
-        zipCode: "34000",
-      },
-      shippingAddress: {
-        contactName: name,
-        city: "İstanbul",
-        country: "Türkiye",
-        address: "Online Hizmet",
-        zipCode: "34000",
-      },
-      billingAddress: {
-        contactName: name,
-        city: "İstanbul",
-        country: "Türkiye",
-        address: "Online Hizmet",
-        zipCode: "34000",
-      },
-      basketItems: [
-        {
-          id: productKey,
-          name: productType,
-          category1: "Hukuk Destek",
-          itemType: Iyzipay.BASKET_ITEM_TYPE.VIRTUAL,
-          price: String(price),
-        },
-      ],
+      callbackUrl: `${process.env.SITE_ORIGIN}/api/payment/callback`, // mevcut callback
+      // buyer, addresses, basketItems ... (sende nasılsa aynı)
     };
 
     iyzipay.checkoutFormInitialize.create(request, (err: any, result: any) => {
       if (err) {
-        console.error("❌ [CREATE-SESSION] Iyzico Hata:", err);
-        return res.status(500).json({ error: "Ödeme başlatılamadı" });
-      }
-
-      console.log("✅ [CREATE-SESSION] Iyzico Yanıtı:", result);
-
-      if (result?.paymentPageUrl) {
-        return res.status(200).json({ paymentPageUrl: result.paymentPageUrl });
-      } else {
+        console.error("CREATE-SESSION error:", err);
         return res.status(500).json({ error: "Ödeme linki alınamadı" });
       }
+      if (result?.paymentPageUrl) {
+        // intent’e iyzico token’ı yaz
+        adminDb.collection("paymentIntents").doc(intentRef.id).set(
+          { iyzicoToken: result.token ?? null, iyzicoRaw: result ?? null },
+          { merge: true }
+        );
+        return res.status(200).json({ paymentPageUrl: result.paymentPageUrl });
+      }
+      return res.status(500).json({ error: "Ödeme linki alınamadı" });
     });
-  } catch (error) {
-    console.error("🔥 [CREATE-SESSION] Sunucu hatası:", error);
+  } catch (e) {
+    console.error("CREATE-SESSION exception:", e);
     return res.status(500).json({ error: "Sunucu hatası" });
   }
 }

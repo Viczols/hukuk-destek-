@@ -1,12 +1,7 @@
+// /api/payment/callback.ts
 import { NextApiRequest, NextApiResponse } from "next";
 import Iyzipay from "iyzipay";
-
-// 🔽 Admin SDK: alias yoksa yolu relative yap: "../../lib/firebaseAdmin"
-import { adminDb, adminRtdb, AdminFs, Admin } from "../../../src/lib/firebaseAdmin";
-
-// --- ESKİ client SDK importları artık gereksiz ---
-// import { dbFirestore } from "../../../firebase/config";
-// import { collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { adminDb, adminRtdb, AdminFs } from "../../../src/lib/firebaseAdmin"; // yolu projene göre düzelt
 
 const iyzipay = new Iyzipay({
   apiKey: process.env.IYZICO_API_KEY!,
@@ -15,88 +10,78 @@ const iyzipay = new Iyzipay({
 });
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ message: "Method not allowed" });
-  }
-
-  const { userId, type, productKey } = req.query;
-  const { token, price } = req.body;
-
-  console.log("📥 [CALLBACK] Query Params:", req.query);
-  console.log("📥 [CALLBACK] Body:", req.body);
-
-  if (!token) {
-    console.error("❌ [CALLBACK] Token bulunamadı");
-    return res.status(400).json({ message: "Token yok" });
-  }
-
   try {
-    const request = { locale: Iyzipay.LOCALE.TR, token };
+    const token = req.body?.token || req.query?.token;
+    if (!token) return res.redirect("/payment/failed");
 
-    iyzipay.checkoutForm.retrieve(request, async (err: any, result: any) => {
+    iyzipay.checkoutForm.retrieve({ locale: Iyzipay.LOCALE.TR, token }, async (err: any, result: any) => {
       if (err) {
-        console.error("📥 [CALLBACK] Iyzico Error:", err);
+        console.error("CALLBACK retrieve error:", err);
         return res.redirect("/payment/failed");
       }
 
-      console.log("📥 [CALLBACK] Retrieve Result:", result);
+      const success = result?.paymentStatus === "SUCCESS";
+      // Token’dan intent bul
+      const intentSnap = await adminDb.collection("paymentIntents").where("iyzicoToken", "==", token).limit(1).get();
+      const intentDoc = intentSnap.empty ? null : intentSnap.docs[0];
 
-      if (result.status === "success" && result.paymentStatus === "SUCCESS") {
+      if (!intentDoc) {
+        console.warn("CALLBACK: intent bulunamadı, token:", token);
+        return res.redirect("/payment/failed");
+      }
+
+      const intentId = intentDoc.id;
+      const intent = intentDoc.data() || {};
+
+      if (!success) {
+        await adminDb.collection("paymentIntents").doc(intentId).set(
+          { status: "failed", iyzicoResponse: result ?? null, updatedAt: AdminFs.FieldValue.serverTimestamp() },
+          { merge: true }
+        );
+        return res.redirect("/payment/failed");
+      }
+
+      // Başarılı: intent -> paid
+      await adminDb.collection("paymentIntents").doc(intentId).set(
+        { status: "paid", iyzicoResponse: result ?? null, updatedAt: AdminFs.FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+
+      // YALNIZCA burada purchases oluştur
+      const purchaseRef = await adminDb.collection("purchases").add({
+        userId: intent.userId,
+        email: intent.email,
+        type: intent.productType,          // örn: "Görüşme Paketi" (UI’da label)
+        productKey: intent.productKey,     // "gorusme" | "uzman" | "dilekce"
+        price: intent.price,
+        paymentStatus: "paid",             // sadece ödeme teyidi
+        status: "pending",                 // TESLİMAT durumu sizde; completed’i PDF yüklerken yazacaksınız
+        createdAt: AdminFs.FieldValue.serverTimestamp(),
+        paidAt: AdminFs.FieldValue.serverTimestamp(),
+        intentId,
+      });
+
+      // (Opsiyonel) Görüşme/Uzman ise chatTicket aç
+      const normalizedKey = String(intent.productKey || "").toLowerCase();
+      if (normalizedKey === "gorusme" || normalizedKey === "uzman") {
         try {
-          // 🔑 productKey normalize
-          const normalizedKey =
-            (productKey as string) ||
-            (typeof type === "string" && type.toLowerCase().includes("görüşme")
-              ? "gorusme"
-              : "dilekce");
-
-          // ✅ Admin SDK ile Firestore'a yaz (rules bypass)
-          const docRef = await adminDb.collection("purchases").add({
-            userId: String(userId),                             // kullanıcı UID
-            productType: type || "Bilinmeyen Paket",
-            type: normalizedKey,                                // önceki kayıtlarda 'type' kullanılıyor olabilir
-            productKey: normalizedKey,                          // yeni alan (varsa UI için)
-            price: result.price || price || 0,
-            paymentId: result.paymentId,
-            token: token,
-            status: "pending",
-            createdAt: AdminFs.FieldValue.serverTimestamp(),    // yeni alan
-            date: AdminFs.FieldValue.serverTimestamp(),         // eski UI uyumu için
+          await adminRtdb.ref(`chatTickets/${purchaseRef.id}`).set({
+            userId: String(intent.userId),
+            purchaseId: purchaseRef.id,
+            type: normalizedKey,
+            status: "open", // open -> active -> closed
+            assignedLawyer: null,
+            createdAt: Date.now(),
           });
-
-          // (Opsiyonel) Görüşme/Uzman ise RTDB'de chat ticket aç
-          if (normalizedKey === "gorusme" || normalizedKey === "uzman") {
-            try {
-              await adminRtdb.ref(`chatTickets/${docRef.id}`).set({
-                userId: String(userId),
-                purchaseId: docRef.id,
-                type: normalizedKey,
-                status: "open", // open -> active -> closed
-                assignedLawyer: null,
-                createdAt: Admin.database.ServerValue.TIMESTAMP,
-              });
-              console.log("✅ [CALLBACK] RTDB chatTickets oluşturuldu:", docRef.id);
-            } catch (rtErr) {
-              console.warn("⚠️ [CALLBACK] RTDB chatTickets oluşturulamadı:", rtErr);
-              // ticket açılmasa da satın alma kaydı tamam — akışı bozma
-            }
-          }
-
-          console.log("✅ [CALLBACK] Satın alma veritabanına kaydedildi (Admin SDK)");
-        } catch (dbError) {
-          console.error("⚠️ [CALLBACK] Firestore kayıt hatası (Admin SDK):", dbError);
-          // Satın alma kaydı admin tarafa yazılamazsa, yine de failed sayfasına yönlendirebilirsin:
-          // return res.redirect("/payment/failed");
+        } catch (rtErr) {
+          console.warn("CALLBACK: chatTickets oluşturulamadı:", rtErr);
         }
-
-        return res.redirect(307, `/payment/success?token=${token}`);
-      } else {
-        console.error("❌ [CALLBACK] Ödeme başarısız:", result);
-        return res.redirect("/payment/failed");
       }
+
+      return res.redirect(307, `/payment/success?token=${token}`);
     });
-  } catch (error) {
-    console.error("🔥 [CALLBACK] Sunucu hatası:", error);
+  } catch (e) {
+    console.error("CALLBACK exception:", e);
     return res.redirect("/payment/failed");
   }
 }
