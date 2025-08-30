@@ -4,7 +4,7 @@ import cors from "cors";
 import Busboy from "busboy";
 import { v4 as uuidv4 } from "uuid";
 import nodemailer from "nodemailer";
-
+import multer from "multer";
 // v2 Functions + .env / Secrets
 import { onRequest } from "firebase-functions/v2/https";
 import { defineSecret, defineString } from "firebase-functions/params";
@@ -33,7 +33,7 @@ function iyziDate(d = new Date()) {
 
         
 const STORAGE_BUCKET = defineString("STORAGE_BUCKET");     // functions/.env
-const MAIL_FROM = defineString("MAIL_FROM");               // functions/.env (opsiyonel)
+              // functions/.env (opsiyonel)
 
 /* -------------------- Secrets (Secret Manager) -------------------- */
 const IYZICO_API_KEY = defineSecret("IYZICO_API_KEY");
@@ -43,6 +43,7 @@ const MAIL_HOST = defineSecret("MAIL_HOST");
 const MAIL_PORT = defineSecret("MAIL_PORT");
 const MAIL_USER = defineSecret("MAIL_USER");
 const MAIL_PASS = defineSecret("MAIL_PASS");
+const MAIL_FROM = defineSecret("MAIL_FROM");
 
 /* -------------------- Firebase Admin -------------------- */
 /** ❗ Modül yüklenirken param değerlerini okumuyoruz. */
@@ -434,105 +435,236 @@ app.post("/blogUpload", (req, res) => {
   }
 });
 
-/* -------------------- 4) Dilekçe yükleme (multipart) -------------------- */
-app.post("/upload-petition", (req, res) => {
-  try {
-    const bb = Busboy({ headers: req.headers });
-    let fileBuffer: Buffer | null = null;
-    let fileName = "petition.pdf";
-    let mime = "application/pdf";
-    let purchaseId = "";
 
-    bb.on("file", (_n, file, info) => {
-      const chunks: Buffer[] = [];
-      mime = info.mimeType || mime;
-      fileName = info.filename || fileName;
-      file.on("data", (d: Buffer) => chunks.push(d));
-      file.on("end", () => (fileBuffer = Buffer.concat(chunks)));
-    });
 
-    bb.on("field", (name, val) => {
-      if (name === "purchaseId") purchaseId = val;
-    });
+/* -------------------- Dilekçe yükleme (multipart + raw) -------------------- */
 
-    bb.on("finish", async () => {
-      try {
-        if (!fileBuffer || !purchaseId) {
-          res.status(400).json({ ok: false, error: "missing file or purchaseId" });
-          return;
-        }
-        const path = `uploads/petitions/${purchaseId}/${Date.now()}-${fileName}`;
-        const url = await saveToStorageAndGetUrl(fileBuffer!, mime, path);
+const uploadCors = cors({ origin: true });
 
-        await db.collection("purchases").doc(purchaseId).set(
-          {
-            petitionUrl: url,
-            petitionPath: path,
-            status: "completed",
-            completedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        );
-
-        res.json({ ok: true, url, path });
-      } catch (e: any) {
-        console.error(e);
-        res.status(500).json({ ok: false, error: String(e?.message || e) });
-      }
-    });
-
-    req.pipe(bb);
-  } catch (e: any) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
-  }
+// --- RAW PDF için body-parser ---
+const rawPdf = express.raw({
+  type: (req) => {
+    const ct = String(req.headers["content-type"] || "").toLowerCase();
+    return ct.startsWith("application/pdf") || ct.startsWith("application/octet-stream");
+  },
+  limit: "25mb",
 });
 
-/* -------------------- 5) E-posta gönderme -------------------- */
-app.post("/sendEmail", async (req, res) => {
+// --- Multer (sadece multipart için) ---
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype !== "application/pdf") return cb(new Error("Sadece PDF kabul edilir"));
+    cb(null, true);
+  },
+});
+
+// Ortak yardımcılar
+function corsHeaders(req: any, res: any) {
+  // route-level CORS’u garantiye al (preflight dışı yanıtlarda da olsun)
+  const origin = req.headers.origin || "*";
+  res.set("Access-Control-Allow-Origin", origin);
+  res.set("Vary", "Origin"); // CDN/proxy için
+}
+
+function bad(req: any, res: any, code: number, msg: string) {
+  corsHeaders(req, res);
+  res.status(code).json({ ok: false, error: msg });
+  return;
+}
+
+async function authUid(req: any, res: any) {
+  const h = req.get("authorization") || req.get("Authorization");
+  if (!h || !h.startsWith("Bearer ")) return bad(req, res, 401, "Yetki yok (Bearer token gerekli)"), null;
+  try { return (await admin.auth().verifyIdToken(h.split(" ")[1]!)).uid as string; }
+  catch { return bad(req, res, 401, "Geçersiz token"), null; }
+}
+
+// 🔁 SABİT YOL + ÜZERİNE YAZMA: petitions/<purchaseId>.pdf
+async function writePurchaseAfterUpload(
+  purchaseId: string,
+  uid: string,
+  _fileName: string,          // gelen ad artık önemsenmiyor
+  buffer: Buffer,
+  req: any,
+  res: any
+) {
+  // purchase + yetki
+  const pRef = db.collection("purchases").doc(purchaseId);
+  const pSnap = await pRef.get();
+  if (!pSnap.exists) return bad(req, res, 404, "Sipariş bulunamadı");
+  const pData = pSnap.data() || {};
+  if (pData.assignedLawyerId && pData.assignedLawyerId !== uid) return bad(req, res, 403, "Bu sipariş size atanmamış");
+
+  // hedef yol: /petitions/<purchaseId>.pdf (ALT KLASÖR YOK)
+  const path = `petitions/${purchaseId}.pdf`;
+
+  // önce aynı path’teki dosyayı sil (varsa) → tamamen "üzerine yaz" davranışı
   try {
-    const { to, subject, html, attachments } = req.body || {};
-    if (!to || !subject || !html) {
-      res.status(400).json({ ok: false, error: "Eksik alan" });
+    await getBucket().file(path).delete({ ignoreNotFound: true });
+  } catch (e) {
+    console.warn("[upload-petition] eski dosya silinemedi (devam):", e);
+  }
+
+  // yeni dosyayı yaz ve token’lı URL oluştur
+  const token = uuidv4();
+  await getBucket().file(path).save(buffer, {
+    contentType: "application/pdf",
+    metadata: {
+      metadata: { firebaseStorageDownloadTokens: token },
+      cacheControl: "public,max-age=31536000",
+    },
+    resumable: false,
+  });
+  const bucketName = getBucket().name;
+  const pdfUrl = `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(
+    path
+  )}?alt=media&token=${token}`;
+
+  // purchase güncelle
+  const updates: Record<string, any> = {
+    deliveredPdfUrl: pdfUrl,
+    deliveredPdfPath: path,   // sabit yol
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  if (!pData.assignedLawyerId) updates.assignedLawyerId = uid;
+  if (!pData.status || pData.status === "pending" || pData.status === "hazırlanıyor") updates.status = "in_progress";
+  await pRef.set(updates, { merge: true });
+
+  corsHeaders(req, res);
+  res.status(200).json({ ok: true, pdfUrl });
+  return;
+}
+
+// === Birleşik endpoint ===
+app.options("/upload-petition", uploadCors); // preflight
+
+app.post(
+  "/upload-petition",
+  uploadCors,
+
+  // 1) RAW PDF yolu (express.raw ile)
+  (req, res, next) => {
+    const ct = String(req.headers["content-type"] || "").toLowerCase();
+    if (ct.startsWith("application/pdf") || ct.startsWith("application/octet-stream")) {
+      return rawPdf(req, res, async () => {
+        try {
+          const uid = await authUid(req, res); if (!uid) return;
+          const purchaseId = String((req.query?.purchaseId || req.body?.purchaseId || "")).trim();
+          if (!purchaseId) return bad(req, res, 400, "purchaseId eksik");
+
+          const buf: Buffer = req.body as Buffer;
+          if (!buf || !buf.length) return bad(req, res, 400, "Boş dosya");
+
+          await writePurchaseAfterUpload(purchaseId, uid, `${purchaseId}.pdf`, buf, req, res);
+        } catch (e: any) {
+          console.error("[upload-petition raw] error:", e);
+          return bad(req, res, 500, e?.message || "Sunucu hatası");
+        }
+      });
+    }
+    return next(); // multipart’a geç
+  },
+
+  // 2) Multipart yolu (Multer ile)
+  (req, res, next): void => {
+    const ct = String(req.headers["content-type"] || "").toLowerCase();
+    if (!ct.includes("multipart/form-data")) {
+      bad(req, res, 415, "Yanlış Content-Type. RAW PDF veya FormData kullanın.");
+      return;
+    }
+    return next();
+  },
+
+  (req, res, next): void => {
+    upload.single("file")(req, res, (err: any) => {
+      if (!err) return next();
+      const msg = err?.message || (err?.code === "LIMIT_FILE_SIZE" ? "Dosya 25MB sınırını aştı" : "Yükleme hatası");
+      return bad(req, res, 400, msg);
+    });
+  },
+
+  async (req, res): Promise<void> => {
+    try {
+      const uid = await authUid(req, res); if (!uid) return;
+      const purchaseId = String(req.body?.purchaseId || "").trim();
+      const file = req.file as Express.Multer.File | undefined;
+      if (!purchaseId) return bad(req, res, 400, "purchaseId eksik");
+      if (!file) return bad(req, res, 400, "PDF dosyası bulunamadı");
+      if (file.mimetype !== "application/pdf") return bad(req, res, 400, "Sadece PDF kabul edilir");
+
+      await writePurchaseAfterUpload(purchaseId, uid, `${purchaseId}.pdf`, file.buffer, req, res);
+      return;
+    } catch (err: any) {
+      console.error("[upload-petition multipart] error:", err);
+      return bad(req, res, 500, err?.message || "Sunucu hatası");
+    }
+  }
+);
+
+/* -------------------- 5) E-posta gönderme -------------------- */
+// En üstlerde mevcut: import nodemailer from "nodemailer";
+// const MAIL_HOST = defineSecret("MAIL_HOST"); ... vs
+
+app.post("/sendEmail", async (req, res): Promise<void> => {
+  try {
+    const { to, subject, html, text, attachments } = req.body || {};
+
+    if (!to || !subject || (!html && !text)) {
+      res.status(400).json({ ok: false, error: "Eksik alan (to/subject/body)" });
       return;
     }
 
+    // Secrets -> transporter
     const host = MAIL_HOST.value();
-    const port = Number(MAIL_PORT.value());
+    const portNum = Number(MAIL_PORT.value() || 465);
     const user = MAIL_USER.value();
     const pass = MAIL_PASS.value();
 
+    if (!host || !user || !pass) {
+      res.status(500).json({ ok: false, error: "Mail secret'leri eksik" });
+      return;
+    }
+
     const transporter = nodemailer.createTransport({
       host,
-      port,
-      secure: port === 465,
+      port: portNum,
+      secure: portNum === 465,        // 465 -> SSL, 587 -> STARTTLS
       auth: { user, pass },
+      // requireTLS: portNum === 587, // 587 kullanıyorsan açabilirsin
     });
 
-    await transporter.sendMail({
-      from: MAIL_FROM.value() || user,
+    // (Opsiyonel) bağlantıyı doğrula — log’a yazar
+    try { await transporter.verify(); } catch (e) { console.warn("SMTP verify:", e); }
+
+    const fromAddr = MAIL_FROM.value() || user;
+    const info = await transporter.sendMail({
+      from: fromAddr,
       to,
       subject,
       html,
-      attachments: (attachments || []).map((a: any) => ({
-        filename: a.filename,
-        path: a.url, // Storage public URL
-      })),
+      text,
+      // attachments formatı: [{ filename, path | content | href | url }]
+      attachments: Array.isArray(attachments) ? attachments : undefined,
     });
 
-    res.json({ ok: true });
+    res.status(200).json({ ok: true, messageId: info?.messageId || null });
+    return;
   } catch (e: any) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    console.error("/sendEmail error:", e);
+    res.status(500).json({ ok: false, error: e?.message || "Sunucu hatası" });
+    return;
   }
 });
+
 
 /* -------------------- Export (v2) -------------------- */
 export const api = onRequest(
   {
     region: "europe-west1",
     cors: true,
-    secrets: [IYZICO_API_KEY, IYZICO_SECRET, MAIL_HOST, MAIL_PORT, MAIL_USER, MAIL_PASS],
+    secrets: [IYZICO_API_KEY, IYZICO_SECRET, MAIL_HOST, MAIL_PORT, MAIL_USER, MAIL_PASS, MAIL_FROM],
   },
   (req, res) => app(req, res)
 );

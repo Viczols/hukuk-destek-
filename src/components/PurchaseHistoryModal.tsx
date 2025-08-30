@@ -27,16 +27,18 @@ interface Props {
 
 interface Purchase {
   id: string;
-  type: string;          // productKey veya legacy type
-  status: string;        // completed / pending / ... (TR değerler de gelebilir)
-  createdAt: number;
+  type: string;                 // legacy type / productKey fallback
+  productKey?: string | null;   // 🔁 eklendi
   productType?: string;
+  status: string;               // completed / pending / ...
+  createdAt: number;
   storagePath?: string;
   downloadUrl?: string;
+  deliveredPdfUrl?: string | null; // 🔁 eklendi (Orders / Functions yazıyor)
 }
 
 /* ------------------------------------------------------------------
-   YARDIMCI: Timestamp/Date/number -> ms
+   Yardımcı: Timestamp/Date/number -> ms
 -------------------------------------------------------------------*/
 function toMillis(v: any): number {
   if (!v) return 0;
@@ -52,14 +54,36 @@ function toMillis(v: any): number {
 }
 
 /* ------------------------------------------------------------------
-   YARDIMCI: Türkçe/İngilizce durumları tek tipe çevir
+   Yardımcı: ürün etiketi
+-------------------------------------------------------------------*/
+function productLabel(key?: string | null, type?: string | null) {
+  const k = String((key || type || "")).toLowerCase();
+  switch (k) {
+    case "uzman":
+    case "uzman-yardimi":
+    case "uzman_yardimi":
+      return "Uzman Yardımıyla Dilekçe Yazımı";
+    case "dilekce":
+    case "ai":
+    case "ai-dilekce":
+      return "Yapay Zekâ ile Dilekçe Yazımı";
+    case "gorusme":
+    case "uzman-gorusmesi":
+      return "Uzmanla Görüşme";
+    default:
+      return type || key || "Paket";
+  }
+}
+
+/* ------------------------------------------------------------------
+   Yardımcı: Türkçe/İngilizce durumları tek tipe çevir
 -------------------------------------------------------------------*/
 type NormalizedStatus = "pending" | "completed" | "failed";
 
 function normalizeStatus(raw?: string): NormalizedStatus {
   const s = (raw || "").toLowerCase().trim();
 
-  // Pending (beklemede/hazırlanıyor/processing vs.)
+  // Pending
   if (
     [
       "pending",
@@ -72,12 +96,13 @@ function normalizeStatus(raw?: string): NormalizedStatus {
       "open",
       "awaiting_payment",
       "awaiting",
+      "in_progress",
     ].includes(s)
   ) {
     return "pending";
   }
 
-  // Completed (ödendi / tamamlandı / başarılı)
+  // Completed
   if (
     [
       "completed",
@@ -95,14 +120,13 @@ function normalizeStatus(raw?: string): NormalizedStatus {
     return "completed";
   }
 
-  // Failed / iptal / başarısız
+  // Failed
   if (
     ["failed", "error", "iptal", "canceled", "cancelled", "başarısız", "basarisiz", "refused"].includes(s)
   ) {
     return "failed";
   }
 
-  // ⚠️ Varsayılanı "pending" yap (güvenli)
   return "pending";
 }
 
@@ -120,7 +144,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
   const [formattedDates, setFormattedDates] = useState<Record<string, string>>({});
   const [onlineLawyerCount, setOnlineLawyerCount] = useState(0);
 
-  // Upload (opsiyonel)
+  // Upload (opsiyonel; mevcut UI davranışını koruyoruz)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [pendingUploadId, setPendingUploadId] = useState<string | null>(null);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
@@ -137,7 +161,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
     return () => unsubscribe();
   }, []);
 
-  // --- Firestore: purchases (ORDER BY createdAt!)
+  // --- Firestore: purchases (ORDER BY createdAt)
   useEffect(() => {
     const fetchPurchases = async () => {
       if (!auth.currentUser) return;
@@ -145,7 +169,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
       const q = query(
         collection(db, "purchases"),
         where("userId", "==", auth.currentUser.uid),
-        orderBy("createdAt", "desc") // <-- düzeltme: createdAt
+        orderBy("createdAt", "desc")
       );
       const snapshot = await getDocs(q);
       const list: Purchase[] = snapshot.docs.map((d) => {
@@ -153,11 +177,13 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
         return {
           id: d.id,
           type: data.productKey || data.type || "dilekce",
-          status: data.status ?? "pending", // <-- düzeltme: default 'pending'
-          createdAt: toMillis(data.createdAt), // <-- düzeltme: createdAt kullan
+          productKey: data.productKey ?? null,                         // 🔁
           productType: data.productType || "",
-          storagePath: data.storagePath || "",
-          downloadUrl: data.downloadUrl || "",
+          status: data.status ?? "pending",
+          createdAt: toMillis(data.createdAt),
+          storagePath: data.deliveredPdfPath || data.storagePath || "",
+          downloadUrl: data.downloadUrl || "",                         // legacy alan
+          deliveredPdfUrl: data.deliveredPdfUrl ?? null,               // 🔁 yeni alan
         };
       });
       setPurchases(list);
@@ -177,16 +203,16 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
     if (!auth.currentUser) throw new Error("Oturum bulunamadı.");
     const db = getFirestore();
 
-    // Satın alma dokümanını oku (kuyruk kaydı için bazı alanları kullanacağız)
+    // Satın alma dokümanını oku
     const pRef = doc(db, "purchases", purchaseId);
     const pSnap = await getDoc(pRef);
     if (!pSnap.exists()) throw new Error("Satın alma bulunamadı.");
     const pdata: any = pSnap.data() || {};
     const userId = pdata.userId || auth.currentUser.uid;
     const productKey = pdata.productKey || pdata.type || "uzman";
-    const productType = pdata.productType || (productKey === "uzman" ? "Uzman Yardımıyla Dilekçe" : "");
+    const productType = pdata.productType || productLabel(productKey, pdata.productType);
 
-    // Firestore tickets/{purchaseId} - waiting kuyruğuna koy (mevcut panelde alternatif)
+    // Firestore tickets/{purchaseId}
     const tRef = doc(db, "tickets", purchaseId);
     await setDoc(
       tRef,
@@ -204,7 +230,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
       { merge: true }
     );
 
-    // (Opsiyonel) RTDB tarafı da varsa anında görünsün
+    // (Opsiyonel) RTDB tarafı da varsa
     try {
       await rtdbSet(rtdbRef(dbRealtime, `tickets/${purchaseId}`), {
         purchaseId,
@@ -236,7 +262,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
     }
   };
 
-  // --- PDF Upload
+  // --- PDF Upload (kullanıcı tarafında da bırakıyoruz; istersen kaldırabilirsin)
   function openFileDialog(purchaseId: string) {
     setPendingUploadId(purchaseId);
     fileInputRef.current?.click();
@@ -258,6 +284,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
       fd.append("purchaseId", purchaseId);
       fd.append("file", file);
 
+      // Not: Kullanıcı modalından yükleme, backend’de yetki kontrolüne tabi.
       const res = await fetch("/api/upload-petition", { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Yükleme başarısız");
@@ -265,7 +292,13 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
       setPurchases((prev) =>
         prev.map((p) =>
           p.id === purchaseId
-            ? { ...p, status: "completed", storagePath: data.storagePath || p.storagePath, downloadUrl: data.downloadUrl || p.downloadUrl }
+            ? {
+                ...p,
+                status: "completed",
+                storagePath: data.storagePath || p.storagePath,
+                downloadUrl: data.downloadUrl || p.downloadUrl,
+                deliveredPdfUrl: data.deliveredPdfUrl || data.pdfUrl || p.deliveredPdfUrl || null, // 🔁
+              }
             : p
         )
       );
@@ -302,29 +335,25 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
         {purchases.length === 0 ? (
           <p className="text-center text-zinc-400 py-10">Henüz satın aldığınız bir paket bulunmuyor.</p>
         ) : (
-          <div className={`${enableScroll ? "max-h-[460px] overflow-y-auto pr-1 custom-scrollbar-dark" : ""} px-4 py-2`}> 
+          <div className={`${enableScroll ? "max-h-[460px] overflow-y-auto pr-1 custom-scrollbar-dark" : ""} px-4 py-2`}>
             <ul className="divide-y divide-white/10">
               {purchases.map((p) => {
-                const key = (p.type || "").toLowerCase(); // "dilekce" | "uzman" | "gorusme"
+                const key = (p.productKey || p.type || "").toLowerCase();
                 const isAI = key === "dilekce";
                 const isUzman = key === "uzman";
                 const isGorusme = key === "gorusme";
 
-                // --- durumları normalize et
+                // durum
                 const norm = normalizeStatus(p.status);
                 const isCompleted = norm === "completed";
                 const isPending = norm === "pending";
                 const isFailed = norm === "failed";
                 const statusText = statusLabelTr(norm, isAI);
 
-                const title =
-                  isGorusme
-                    ? "Görüşme Paketi"
-                    : isAI
-                    ? "Dilekçe Paketi (AI)"
-                    : isUzman
-                    ? "Uzman Yardımıyla Dilekçe Yazımı"
-                    : p.productType || "Paket";
+                const title = productLabel(p.productKey, p.productType);
+
+                // PDF URL (yeni alan öncelikli)
+                const pdfUrl = p.deliveredPdfUrl || p.downloadUrl || "";
 
                 return (
                   <li key={p.id} className="py-3 flex items-start justify-between gap-4">
@@ -343,19 +372,20 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
                         • Tarih: {p.createdAt ? new Date(p.createdAt).toLocaleString() : "-"}
                       </p>
 
-                      {/* PDF indir: sadece downloadUrl varsa göster */}
-                      {p.downloadUrl && (
+                      {/* PDF indir: yalnızca TAMAMLANDI ve URL varsa */}
+                      {isCompleted && pdfUrl && (
                         <a
-                          href={p.downloadUrl}
+                          href={pdfUrl}
                           target="_blank"
-                          rel="noopener"
+                          rel="noopener noreferrer"
                           className="inline-flex items-center gap-2 text-sm text-zinc-200 hover:text-white mt-1"
+                          title="PDF'i indir / aç"
                         >
                           <svg width="16" height="16" viewBox="0 0 24 24" className="fill-current">
                             <path d="M12 3a1 1 0 0 1 1 1v9.586l2.293-2.293a1 1 0 1 1 1.414 1.414l-4.007 4.007a1.5 1.5 0 0 1-2.121 0L6.572 12.707a1 1 0 0 1 1.414-1.414L10.28 13.59V4a1 1 0 0 1 1-1z" />
                             <path d="M5 19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2a1 1 0 1 0-2 0v2H7v-2a1 1 0 0 0-1 1z" />
                           </svg>
-                          PDF indir
+                          PDF’i indir
                         </a>
                       )}
                     </div>

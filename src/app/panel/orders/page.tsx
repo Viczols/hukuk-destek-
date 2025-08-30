@@ -20,7 +20,7 @@ type Purchase = {
   id: string;
   userId: string;
   productType: "uzman" | "ai" | string;
-  status: "pending" | "in_progress" | "completed" | string;
+  status: "pending" | "in_progress" | "completed" | "hazırlanıyor" | string;
   assignedLawyerId?: string | null;
   deliveredPdfUrl?: string | null;
   userEmail?: string | null;
@@ -28,7 +28,8 @@ type Purchase = {
   chatId?: string | null;
 };
 
-const ACTIVE_SET = new Set(["pending", "in_progress"]);
+// 🔁 "hazırlanıyor" eklendi
+const ACTIVE_SET = new Set(["pending", "in_progress", "hazırlanıyor"]);
 
 export default function OrdersPage() {
   const [orders, setOrders] = useState<Purchase[]>([]);
@@ -61,11 +62,11 @@ export default function OrdersPage() {
 
       if (!u) return;
 
-      // 1) Aktif siparişler: assignedLawyerId==uid ve status in (pending, in_progress)
+      // 1) Aktif siparişler: assignedLawyerId==uid ve status in (pending, in_progress, hazırlanıyor)
       const qActive = query(
         collection(db, "purchases"),
         where("assignedLawyerId", "==", u.uid),
-        where("status", "in", ["pending", "in_progress"])
+        where("status", "in", ["pending", "in_progress", "hazırlanıyor"]) // 🔁 eklendi
       );
       unsubPurchasesActive = onSnapshot(
         qActive,
@@ -192,7 +193,13 @@ export default function OrdersPage() {
 
   // Tüm siparişlerde sıralama (önce aktifler, sonra createdAt ile)
   const sortAll = (arr: Purchase[]) => {
-    const rank: Record<string, number> = { in_progress: 0, pending: 1, completed: 2 };
+    // 🔁 "hazırlanıyor" pending ile aynı öncelikte
+    const rank: Record<string, number> = {
+      in_progress: 0,
+      pending: 1,
+      "hazırlanıyor": 1,
+      completed: 2,
+    };
     return arr
       .slice()
       .sort((a, b) => {
@@ -245,11 +252,23 @@ export default function OrdersPage() {
       fd.append("purchaseId", p.id);
       fd.append("file", file, `${p.id}.pdf`);
 
-      const res = await fetch("/api/upload-petition", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${idToken}` },
-        body: fd,
-      });
+const apiBase =
+  process.env.NEXT_PUBLIC_FUNCTIONS_BASE ??
+  "https://europe-west1-dilekce-destek.cloudfunctions.net/api";
+
+
+
+const res = await fetch(`${apiBase}/upload-petition?purchaseId=${encodeURIComponent(p.id)}`, {
+  method: "POST",
+  headers: {
+    Authorization: `Bearer ${idToken}`,
+    "Content-Type": file.type || "application/pdf",
+    "X-File-Name": `${p.id}.pdf`,
+  },
+  body: file, // raw
+});
+
+
 
       if (!res.ok) {
         const j = await res.json().catch(() => ({} as any));
@@ -268,51 +287,92 @@ export default function OrdersPage() {
     }
   };
 
-  const completeOrder = async (p: Purchase) => {
-    if (!p.deliveredPdfUrl) return alert("Önce PDF yükleyin.");
-    if (!auth.currentUser) return alert("Oturum bulunamadı.");
+const completeOrder = async (p: Purchase) => {
+  if (!p.deliveredPdfUrl) return alert("Önce PDF yükleyin.");
+  if (!auth.currentUser) return alert("Oturum bulunamadı.");
 
-    setBusyId(p.id);
-    try {
-      await updateDoc(doc(db, "purchases", p.id), {
-        status: "completed",
-        updatedAt: serverTimestamp(),
-        completedAt: serverTimestamp(),
-      });
-      alert("Sipariş tamamlandı.");
-    } catch (e: any) {
-      console.error("[completeOrder] error:", e);
-      alert("Tamamlama başarısız: " + (e?.message || e?.code || String(e)));
-    } finally {
-      setBusyId(null);
-    }
-  };
+  setBusyId(p.id);
+  try {
+    await updateDoc(doc(db, "purchases", p.id), {
+      status: "completed",
+      updatedAt: serverTimestamp(),
+      completedAt: serverTimestamp(),
+    });
 
-  const resendMail = async (p: Purchase) => {
+    // ✔ otomatik mail
     const email = p.userEmail ?? emailCacheRef.current.get(p.userId) ?? null;
-    if (!email) return alert("E-posta bulunamadı.");
-    if (!p.deliveredPdfUrl) return alert("PDF yüklenmemiş.");
+    if (email) {
+      const apiBase =
+        process.env.NEXT_PUBLIC_FUNCTIONS_BASE ??
+        "https://europe-west1-dilekce-destek.cloudfunctions.net/api";
 
-    setBusyId(p.id);
-    try {
-      await fetch("/api/notify/purchase-pdf", {
+      await fetch(`${apiBase}/sendEmail`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          purchaseId: p.id,
-          pdfUrl: p.deliveredPdfUrl,
-          userId: p.userId,
-          userEmail: email,
+          to: email,
+          subject: "Dilekçeniz hazır 🎉",
+          html: `<p>Merhaba, dilekçeniz hazır. <a href="${p.deliveredPdfUrl}" target="_blank">PDF’i indir</a>.</p>`,
         }),
       });
-      alert("E-posta gönderimi tetiklendi.");
-    } catch (e: any) {
-      console.error("[resendMail] error:", e);
-      alert("E-posta gönderilemedi: " + (e?.message || e?.code || String(e)));
-    } finally {
-      setBusyId(null);
     }
-  };
+
+    alert("Sipariş tamamlandı.");
+  } catch (e: any) {
+    console.error("[completeOrder] error:", e);
+    alert("Tamamlama başarısız: " + (e?.message || e?.code || String(e)));
+  } finally {
+    setBusyId(null);
+  }
+};
+
+
+const resendMail = async (p: Purchase) => {
+  const email = p.userEmail ?? emailCacheRef.current.get(p.userId) ?? null;
+  if (!email) return alert("E-posta bulunamadı.");
+  if (!p.deliveredPdfUrl) return alert("PDF yüklenmemiş.");
+
+  setBusyId(p.id);
+  try {
+    const apiBase =
+      process.env.NEXT_PUBLIC_FUNCTIONS_BASE ??
+      "https://europe-west1-dilekce-destek.cloudfunctions.net/api";
+
+    const subject = "Dilekçeniz hazır 🎉";
+    const html = `
+      <div style="font:14px/1.6 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial;">
+        <p>Merhaba,</p>
+        <p>Dilekçeniz hazır. Aşağıdaki bağlantıdan indirebilirsiniz:</p>
+        <p><a href="${p.deliveredPdfUrl}" target="_blank">PDF’i indir / görüntüle</a></p>
+        <hr/>
+        <p>Teşekkürler,<br/>Hukuk Destek Ekibi</p>
+      </div>
+    `;
+
+    const resp = await fetch(`${apiBase}/sendEmail`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: email,
+        subject,
+        html,
+        // isterseniz attachment olarak da ekleyebilirsiniz:
+        // attachments: [{ filename: `${p.id}.pdf`, url: p.deliveredPdfUrl }]
+      }),
+    });
+
+    const j = await resp.json().catch(() => ({}));
+    if (!resp.ok || !j?.ok) throw new Error(j?.error || `Mail failed: ${resp.status}`);
+
+    alert("E-posta gönderildi.");
+  } catch (e: any) {
+    console.error("[resendMail] error:", e);
+    alert("E-posta gönderilemedi: " + (e?.message || e?.code || String(e)));
+  } finally {
+    setBusyId(null);
+  }
+};
+
 
   // Bölümler
   const activeList = useMemo(() => orders.filter((o) => ACTIVE_SET.has(o.status)), [orders]);
@@ -341,7 +401,8 @@ export default function OrdersPage() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-[240px]">
                   <div className="font-medium">
-                    {o.productType || "Ürün"} <StatusBadge status={o.status} />
+                    { productLabel((o as any).productKey, o.productType) }
+ <StatusBadge status={o.status} />
                   </div>
                   <div className="text-xs text-gray-600">ID: {o.id}</div>
                   <div className="text-xs text-gray-600">
@@ -470,7 +531,8 @@ export default function OrdersPage() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-[240px]">
                   <div className="font-medium">
-                    {o.productType || "Ürün"} <StatusBadge status={o.status} />
+                    { productLabel((o as any).productKey, o.productType) }
+ <StatusBadge status={o.status} />
                   </div>
                   <div className="text-xs text-gray-600">ID: {o.id}</div>
                   <div className="text-xs text-gray-600">
@@ -606,6 +668,7 @@ function StatusBadge({ status }: { status: string }) {
     pending: { label: "Bekliyor", cls: "bg-yellow-100 text-yellow-800" },
     in_progress: { label: "Devam Ediyor", cls: "bg-blue-100 text-blue-800" },
     completed: { label: "Tamamlandı", cls: "bg-green-100 text-green-800" },
+    "hazırlanıyor": { label: "Hazırlanıyor", cls: "bg-yellow-50 text-yellow-700" }, // 🔁 eklendi
   };
   const v = map[status] ?? { label: status, cls: "bg-gray-100 text-gray-700" };
   return <span className={`ml-2 rounded px-2 py-0.5 text-xs ${v.cls}`}>{v.label}</span>;
@@ -623,4 +686,23 @@ function maskEmail(email?: string | null) {
   const [dom, tld = ""] = domain.split(".");
   const md = dom.length <= 1 ? dom + "*" : dom.slice(0, 1) + "*".repeat(Math.max(1, dom.length - 1));
   return `${ml}@${md}${tld ? "." + tld : ""}`;
+}
+function productLabel(key?: string | null, type?: string | null) {
+  const k = String((key || type || "")).toLowerCase();
+  switch (k) {
+    case "uzman":
+    case "uzman-yardimi":
+    case "uzman_yardimi":
+      return "Uzman Yardımıyla Dilekçe Yazımı";
+    case "dilekce":
+    case "ai":
+    case "ai-dilekce":
+      return "Yapay Zekâ ile Dilekçe Yazımı";
+    case "gorusme":
+    case "uzman-gorusmesi":
+      return "Uzmanla Görüşme";
+    default:
+      // Sunucu farklı bir değer yazmışsa en azından tipi gösterelim
+      return type || key || "Ürün";
+  }
 }
