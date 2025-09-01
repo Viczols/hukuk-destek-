@@ -1,28 +1,37 @@
+// src/app/redirect/page.tsx
 "use client";
-import { useSearchParams, useRouter } from "next/navigation";
-import { useEffect } from "react";
 
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+
+// Statik export + App Router için güvenli client-side redirect.
+// /redirect?to=/hedef  -> /hedef
 export default function RedirectPage() {
-  const params = useSearchParams();
+  return <RedirectClient />;
+}
+
+function RedirectClient() {
   const router = useRouter();
-  const htmlContent = params?.get("html") || "";
 
   useEffect(() => {
-    if (!htmlContent) {
-      router.push("/");
-    }
-  }, [htmlContent, router]);
+    // URL parametresini doğrudan window.location’dan oku (SSR yok, client’tayız)
+    const search = typeof window !== "undefined" ? window.location.search : "";
+    const urlParams = new URLSearchParams(search);
+    const raw = urlParams.get("to") || "/";
 
-  if (!htmlContent) {
-    return <p>Yönlendirme bilgisi bulunamadı...</p>;
-  }
+    // Basit güvenlik: sadece site içi path’e izin ver
+    const to = raw.startsWith("/") ? raw : "/";
 
+    router.replace(to);
+  }, [router]);
+
+  return <Fallback />;
+}
+
+function Fallback() {
   return (
-    <div className="w-full min-h-screen flex items-center justify-center bg-gray-100">
-      <div
-        className="bg-white shadow-md rounded p-4 w-full max-w-3xl"
-        dangerouslySetInnerHTML={{ __html: atob(htmlContent) }}
-      />
-    </div>
+    <main className="min-h-[50vh] flex items-center justify-center">
+      <p className="text-sm text-zinc-600">Yönlendiriliyor…</p>
+    </main>
   );
 }
