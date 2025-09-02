@@ -1,4 +1,4 @@
-// src/app/blog/[slug]/generateStaticParams.ts
+// src/app/blog/_slug.bak/generateStaticParams.ts
 // Server-only: Statik export sırasında Firestore REST ile slug listesi üretir.
 
 type RunQueryRow = {

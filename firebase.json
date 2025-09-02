@@ -11,9 +11,18 @@
         "*.local"
       ],
       "predeploy": [
-        
         "npm --prefix \"$RESOURCE_DIR\" run build"
       ]
     }
-  ]
+  ],
+  "hosting": {
+    "public": "out",
+    "rewrites": [
+      { "source": "/api/**", "function": { "functionId": "api", "region": "europe-west1" } },
+      { "source": "/blog/**", "destination": "/blog/index.html" },
+      { "source": "/api/**", "function": { "functionId": "api", "region": "europe-west1" } },
+      { "source": "/blog/**", "destination": "/blog/index.html" }
+      
+    ]
+  }
 }

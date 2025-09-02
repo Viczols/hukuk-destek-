@@ -1,7 +1,7 @@
 import * as admin from "firebase-admin";
 import express from "express";
 import cors from "cors";
-import Busboy from "busboy";
+
 import { v4 as uuidv4 } from "uuid";
 import nodemailer from "nodemailer";
 import multer from "multer";
@@ -9,6 +9,7 @@ import multer from "multer";
 import { onRequest } from "firebase-functions/v2/https";
 import { defineSecret, defineString } from "firebase-functions/params";
 
+import * as mime from "mime-types";
 
 
 // Üste bir yardımcı ekleyin (dosyanın başına da koyabilirsiniz)
@@ -71,25 +72,56 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 /* -------------------- Helpers -------------------- */
-async function saveToStorageAndGetUrl(
-  buffer: Buffer,
-  contentType: string,
-  path: string
-) {
-  const token = uuidv4();
-  const bucket = getBucket();
-  await bucket.file(path).save(buffer, {
-    contentType,
-    metadata: {
-      metadata: { firebaseStorageDownloadTokens: token },
-      cacheControl: "public,max-age=31536000",
-    },
-    resumable: false,
-  });
-  const bucketName = bucket.name;
-  return `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encodeURIComponent(
-    path
-  )}?alt=media&token=${token}`;
+
+
+
+
+// ---- Multer (memory) ----
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype !== "application/pdf") return cb(new Error("Sadece PDF kabul edilir"));
+    cb(null, true);
+  },
+});
+
+
+// ---- Yardımcılar ----
+
+const blogUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 1, fileSize: 25 * 1024 * 1024 }, // 25MB
+  fileFilter: (_req, file, cb) => {
+    const ok =
+      file.mimetype === "image/png" ||
+      file.mimetype === "image/jpeg" ||
+      file.mimetype === "image/webp" ||
+      file.mimetype === "image/gif" ||
+      file.mimetype === "image/avif";
+    if (!ok) return cb(new Error("Sadece resim dosyaları kabul edilir"));
+    cb(null, true);
+  },
+});
+
+// Güvenli isimlendirme
+function safeName(name: string) {
+  const dot = name.lastIndexOf(".");
+  const base = (dot > 0 ? name.slice(0, dot) : name)
+    .toLowerCase()
+    .trim()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[ğĞ]/g, "g")
+    .replace(/[üÜ]/g, "u")
+    .replace(/[şŞ]/g, "s")
+    .replace(/[ıİ]/g, "i")
+    .replace(/[öÖ]/g, "o")
+    .replace(/[çÇ]/g, "c")
+    .replace(/[^a-z0-9.-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const ext = dot > 0 ? name.slice(dot).toLowerCase() : "";
+  return (base || "kapak") + (ext || "");
 }
 
 /* -------------------- 1) Ödeme başlatma (Iyzico Checkout Form) -------------------- */
@@ -393,47 +425,49 @@ app.all("/paymentCallback", async (req, res): Promise<void> => {
 
 
 /* -------------------- 3) Blog kapak yükleme (multipart) -------------------- */
-app.post("/blogUpload", (req, res) => {
+app.post("/blogUpload", blogUpload.single("file"), async (req, res) => {
   try {
-    const bb = Busboy({ headers: req.headers });
-    let fileBuffer: Buffer | null = null;
-    let fileName = "upload.bin";
-    let mime = "application/octet-stream";
-    let targetDir = "uploads/blog/covers";
+    const postId = (req.body?.postId as string) || "";
+    const f = req.file;
+    if (!postId || !f) {
+      return res
+        .status(400)
+        .json({ error: "bad-request", message: "postId ve file zorunlu" });
+    }
 
-    bb.on("file", (_name, file, info) => {
-      const chunks: Buffer[] = [];
-      mime = info.mimeType || mime;
-      fileName = info.filename || fileName;
-      file.on("data", (d: Buffer) => chunks.push(d));
-      file.on("end", () => (fileBuffer = Buffer.concat(chunks)));
+    const bucket = admin.storage().bucket();
+    const ext =
+      (mime.extension(f.mimetype || "") as string | false) ||
+      (f.originalname.split(".").pop() || "bin");
+    const fname = safeName(f.originalname || `cover.${ext}`);
+    const path = `blog/${postId}/${Date.now()}-${fname}`;
+
+    await bucket.file(path).save(f.buffer, {
+      contentType: f.mimetype || "application/octet-stream",
+      metadata: {
+        cacheControl: "public, max-age=31536000, immutable",
+      },
     });
 
-    bb.on("field", (name, val) => {
-      if (name === "dir" && val) targetDir = val;
-    });
+    // İstersen public URL veya signed URL üret:
+    // Public ise: await bucket.file(path).makePublic(); const url = `https://storage.googleapis.com/${bucket.name}/${path}`
+    // Aşağıda signed url:
+    const [url] = await bucket
+      .file(path)
+      .getSignedUrl({
+        action: "read",
+        expires: Date.now() + 365 * 24 * 3600 * 1000,
+      });
 
-    bb.on("finish", async () => {
-      try {
-        if (!fileBuffer) {
-          res.status(400).json({ ok: false, error: "no file" });
-          return;
-        }
-        const path = `${targetDir}/${Date.now()}-${uuidv4()}-${fileName}`;
-        const url = await saveToStorageAndGetUrl(fileBuffer!, mime, path);
-        res.json({ ok: true, url, path });
-      } catch (e: any) {
-        console.error(e);
-        res.status(500).json({ ok: false, error: String(e?.message || e) });
-      }
-    });
-
-    req.pipe(bb);
-  } catch (e: any) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: String(e?.message || e) });
+    return res.json({ url, path });
+  } catch (err: any) {
+    console.error("blogUpload error:", err);
+    return res
+      .status(500)
+      .json({ error: "upload-failed", message: String(err?.message || err) });
   }
 });
+
 
 
 
@@ -451,14 +485,7 @@ const rawPdf = express.raw({
 });
 
 // --- Multer (sadece multipart için) ---
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => {
-    if (file.mimetype !== "application/pdf") return cb(new Error("Sadece PDF kabul edilir"));
-    cb(null, true);
-  },
-});
+
 
 // Ortak yardımcılar
 function corsHeaders(req: any, res: any) {

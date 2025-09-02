@@ -1,9 +1,11 @@
-// src/app/blog/[slug]/BlogPostClient.tsx
+// src/app/blog/_slug.bak/BlogPostClient.tsx
 "use client";
 
 import React, { useEffect, useState } from "react";
 import Image from "next/image";
-import Link from "next/link";
+// 👇 Firebase app'i mutlaka initialize et (yalnızca yan etki için import)
+import "../../../firebase/config"; // GEREKİRSE: "@/firebase/config" ya da doğru relative path
+
 import {
   getFirestore,
   collection,
@@ -90,12 +92,12 @@ export default function BlogPostClient({ slug }: { slug: string }) {
           <p className="text-zinc-400 mt-2">
             Aradığınız yazı kaldırılmış ya da taşınmış olabilir.
           </p>
-          <Link
+          <a
             href="/#blog"
             className="mt-6 inline-block rounded-full bg-white text-zinc-900 px-4 py-2 hover:bg-zinc-200 transition"
           >
-            Blog’a dön
-          </Link>
+            Anasayfa’ya dön
+          </a>
         </div>
       </main>
     );
@@ -106,12 +108,12 @@ export default function BlogPostClient({ slug }: { slug: string }) {
       <div className="max-w-6xl mx-auto px-4 py-12 md:py-16">
         <div className="grid md:grid-cols-[2fr_1fr] gap-8 lg:gap-12">
           <article>
-            <Link
+            <a
               href="/#blog"
               className="text-sm text-zinc-400 hover:text-zinc-200 transition"
             >
-              ← Blog’a dön
-            </Link>
+              ← Anasayfa’ya dön
+            </a>
 
             <h1 className="mt-3 text-3xl md:text-4xl font-semibold tracking-tight text-white">
               {post.title}
@@ -155,9 +157,9 @@ export default function BlogPostClient({ slug }: { slug: string }) {
             </h3>
             <div className="space-y-3">
               {others.map((p) => (
-                <Link
+                <a
                   key={p.id}
-                  href={`/blog/${p.slug}`}
+                  href={`/blog/${p.slug}/`}
                   className="flex gap-3 rounded-xl border border-white/10 bg-white/5 backdrop-blur hover:bg-white/10 transition p-2"
                 >
                   <div className="relative w-20 h-14 shrink-0 overflow-hidden rounded-lg">
@@ -182,7 +184,7 @@ export default function BlogPostClient({ slug }: { slug: string }) {
                       {p.publishedAtText}
                     </div>
                   </div>
-                </Link>
+                </a>
               ))}
             </div>
           </aside>

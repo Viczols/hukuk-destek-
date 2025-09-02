@@ -1,72 +1,99 @@
-// src/app/api/blogUpload/route.ts
+// app/api/blogUpload/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { getApps, initializeApp, applicationDefault } from "firebase-admin/app";
+import { getAuth as getAdminAuth } from "firebase-admin/auth";
+import { getStorage } from "firebase-admin/storage";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { NextResponse } from "next/server";
-import { adminBucket, adminApp } from "../../../src/lib/firebaseAdmin"; // firebaseAdmin'i bozma, sadece import et
-import { getAuth } from "firebase-admin/auth";
-
-function slugify(s: string) {
-  return s
+function extFromMime(mime?: string) {
+  if (!mime) return "";
+  if (mime === "image/png") return ".png";
+  if (mime === "image/jpeg") return ".jpg";
+  if (mime === "image/webp") return ".webp";
+  if (mime === "image/gif") return ".gif";
+  return "";
+}
+function slugify(input: string) {
+  return input
     .toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/ğ/g, "g").replace(/ü/g, "u").replace(/ş/g, "s")
-    .replace(/ı/g, "i").replace(/ö/g, "o").replace(/ç/g, "c")
-    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    .trim()
+    .replace(/ğ/g, "g")
+    .replace(/ü/g, "u")
+    .replace(/ş/g, "s")
+    .replace(/ı/g, "i")
+    .replace(/ö/g, "o")
+    .replace(/ç/g, "c")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+function safeFilename(name: string, mime?: string) {
+  const dot = name.lastIndexOf(".");
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const givenExt = dot > 0 ? name.slice(dot).toLowerCase() : "";
+  const preferredExt = extFromMime(mime) || givenExt || ".bin";
+  return (slugify(base || "kapak") + preferredExt).replace(/^-+|-+$/g, "");
 }
 
-export async function POST(req: Request) {
+if (!getApps().length) {
+  initializeApp({
+    // Lokal/Cloud: ADC (Application Default Credentials) kullan
+    credential: applicationDefault(),
+    storageBucket: process.env.FIREBASE_STORAGE_BUCKET, // örn: dilekce-destek.appspot.com
+  });
+}
+
+export async function POST(req: NextRequest) {
   try {
-    // 1) (Opsiyonel ama önerilir) Auth: Panel zaten login; ID token varsa uid çıkar
-    let uid = "anonymous";
-    const authz = req.headers.get("authorization") || req.headers.get("Authorization");
-    if (authz?.startsWith("Bearer ")) {
-      try {
-        const idToken = authz.slice(7);
-        const decoded = await getAuth(adminApp).verifyIdToken(idToken);
-        uid = decoded.uid || uid;
-      } catch {
-        // token hatası var ise, güvenliği zorunlu tutmak istemiyorsan yutabilirsin
-        // uid 'anonymous' kalır; dilersen burada 401 de dönebilirsin.
-      }
+    // --- Auth kontrol (Firebase ID token)
+    const authHeader = req.headers.get("authorization") || "";
+    const m = authHeader.match(/^Bearer\s+(.+)$/i);
+    if (!m) {
+      return NextResponse.json({ error: "auth", message: "Missing Bearer token" }, { status: 401 });
     }
+    await getAdminAuth().verifyIdToken(m[1]);
 
-    // 2) FormData
+    // --- Multipart form'u web API ile oku
     const form = await req.formData();
-    const file   = form.get("file") as File | null;
-    const postId = String(form.get("postId") || "");
-    if (!file || !postId) {
-      return NextResponse.json({ error: "Missing file/postId" }, { status: 400 });
+    const file = form.get("file") as File | null;
+    const postId = (form.get("postId") || "").toString();
+
+    if (!file) {
+      return NextResponse.json({ error: "bad-form", message: "`file` yok" }, { status: 400 });
+    }
+    if (!postId) {
+      return NextResponse.json({ error: "bad-form", message: "`postId` yok" }, { status: 400 });
     }
 
-    // 3) Dosya adı ve path
-    const buf = Buffer.from(await file.arrayBuffer());
-    const dot  = file.name.lastIndexOf(".");
-    const base = dot > -1 ? file.name.slice(0, dot) : file.name;
-    const ext  = dot > -1 ? file.name.slice(dot).toLowerCase() : "";
-    const safe = `${slugify(base || "kapak")}${ext || ""}`;
+    // --- Buffer'a çevir
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
 
-    const path = `covers/${uid}/${postId}/${safe}`;
-    const gcsFile = adminBucket.file(path);
+    // --- Hedef path
+    const fname = safeFilename(file.name, file.type);
+    const dstPath = `covers/${postId}/${Date.now()}_${fname}`;
 
-    // 4) Storage'a kaydet
-    await gcsFile.save(buf, {
+    // --- Storage'a yaz
+    const bucket = getStorage().bucket();
+    await bucket.file(dstPath).save(buffer, {
       resumable: false,
       contentType: file.type || "application/octet-stream",
-      metadata: { cacheControl: "public, max-age=31536000" },
+      metadata: {
+        cacheControl: "public, max-age=31536000",
+      },
     });
 
-    // 5) Uzun süreli okunabilir imzalı URL
-    const [signedUrl] = await gcsFile.getSignedUrl({
-      action: "read",
-      expires: "2035-01-01",
-    });
+    // --- Public erişim URL'i (alt=media)
+    const coverUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(
+      dstPath
+    )}?alt=media`;
 
-    return NextResponse.json({ coverUrl: signedUrl, coverPath: path }, { status: 200 });
+    return NextResponse.json({ coverUrl, coverPath: dstPath }, { status: 200 });
   } catch (err: any) {
-    console.error("UPLOAD API ERROR:", err?.message || err);
+    console.error("blogUpload route error:", err);
     return NextResponse.json(
-      { error: "upload-failed", detail: err?.message || String(err) },
+      { error: "server", message: String(err?.message || err) },
       { status: 500 }
     );
   }

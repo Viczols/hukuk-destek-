@@ -1,4 +1,4 @@
-// src/pages/blog/[slug].tsx
+// src/pages/blog/_slug.bak/page.tsx
 import type { GetStaticPaths, GetStaticProps, InferGetStaticPropsType } from "next";
 import Head from "next/head";
 import Link from "next/link";
@@ -7,7 +7,7 @@ type Props = { slug: string };
 
 export default function BlogSlugPage({ slug }: InferGetStaticPropsType<typeof getStaticProps>) {
   // İstersen burada client bileşenini kullan:
-  // return <BlogPostClient slug={slug} />;
+  
   return (
     <>
       <Head><title>Blog</title></Head>

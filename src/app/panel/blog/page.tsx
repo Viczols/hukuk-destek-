@@ -4,6 +4,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { BlogPost } from "../../../types/blog";
 
+import { useRef } from "react";
+
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import {
   getFirestore,
@@ -24,6 +26,8 @@ import {
   ref,
   deleteObject, // delete için bırakıyoruz
 } from "firebase/storage";
+
+
 
 /* ===================== Firebase tekil referanslar ===================== */
  const db = getFirestore();
@@ -65,6 +69,8 @@ function safeFilename(name: string, mime?: string) {
 
 /* ================================ Page ================================ */
 export default function BlogPage() {
+    const coverInputRef = useRef<HTMLInputElement | null>(null);
+  
   const [userId, setUserId] = useState<string | null>(null);
   const [authorName, setAuthorName] = useState<string | undefined>();
 
@@ -166,45 +172,39 @@ export default function BlogPage() {
   }
 
   /* --------- Kapak upload: API route (ID token ile, CORS’suz) --------- */
-  async function uploadCoverIfSelected(postId: string) {
-    if (!coverFile) {
-      console.log("[BLOG] no coverFile selected — skipping upload");
-      return;
-    }
-    const user = auth.currentUser;
-    if (!user) throw new Error("no-auth");
+  
+async function uploadCoverIfSelected(postId: string) {
+  // DOSYAYI STATE'TEN AL
+  const raw = coverFile;
+  if (!raw) return null;
 
-    // güvenli dosya adı üret
-    const safeName = safeFilename(coverFile.name, coverFile.type);
+  try {
+    const idToken = auth.currentUser
+      ? await auth.currentUser.getIdToken()
+      : undefined;
 
     const fd = new FormData();
-    fd.append("file", coverFile, safeName);
     fd.append("postId", postId);
-
-    const idToken = await user.getIdToken();
+    // alan adı server’da single('file') ile eşleşiyor
+    fd.append("file", raw, raw.name);
 
     const res = await fetch("/api/blogUpload", {
       method: "POST",
-      headers: { Authorization: `Bearer ${idToken}` },
-      body: fd,
+      headers: idToken ? { Authorization: `Bearer ${idToken}` } : undefined,
+      body: fd, // Content-Type elle yazma, fetch kendisi boundary ekler
     });
 
-    if (!res.ok) {
-      const t = await res.text().catch(() => "");
-      console.error("[BLOG] cover upload via API failed:", res.status, t);
-      throw new Error("upload-api-failed");
-    }
+    const text = await res.text();
+    if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
 
-    const uploaded = (await res.json()) as { coverUrl: string; coverPath: string };
-
-    await updateDoc(doc(db, "posts", postId), {
-      coverUrl: uploaded.coverUrl,
-      coverPath: uploaded.coverPath,
-      updatedAt: Date.now(),
-    });
-
-    console.log("[BLOG] cover uploaded:", uploaded.coverUrl);
+    const data = JSON.parse(text);
+    return data.url as string;
+  } catch (e) {
+    console.error("[BLOG] cover upload via API failed:", e);
+    return null;
   }
+}
+
 
   /* --------------------- Upsert (create or update) -------------------- */
   async function upsertPostAndReturnId(): Promise<string> {
@@ -392,7 +392,7 @@ export default function BlogPage() {
               <label className="block text-sm text-zinc-300">Kapak Görseli</label>
               <input
                 type="file"
-                accept="image/*"
+                accept="image/png,image/jpeg,image/webp,image/gif,image/avif"
                 onChange={(e) => {
                   const f = e.target.files?.[0] || null;
                   setCoverFile(f);
