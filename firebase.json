@@ -17,11 +17,12 @@
   ],
   "hosting": {
     "public": "out",
+    "ignore": ["**/.*", "**/node_modules/**"],
     "rewrites": [
       { "source": "/api/**", "function": { "functionId": "api", "region": "europe-west1" } },
-      { "source": "/blog/**", "destination": "/blog/index.html" },
-      { "source": "/api/**", "function": { "functionId": "api", "region": "europe-west1" } },
+      { "source": "/blog",     "destination": "/blog/index.html" },
       { "source": "/blog/**", "destination": "/blog/index.html" }
+
       
     ]
   }

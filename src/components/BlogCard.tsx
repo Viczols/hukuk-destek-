@@ -1,3 +1,4 @@
+// src/components/BlogCard.tsx
 "use client";
 import Image from "next/image";
 import Link from "next/link";
@@ -54,7 +55,13 @@ export default function BlogCard({ post }: Props) {
           <time dateTime={post.publishedAt?.toString()} className="text-xs text-zinc-400">
             {post.publishedAtText}
           </time>
- <Link href={`/blog/${post.slug}/`} className="text-sm font-medium rounded-full px-3 py-1.5 bg-white text-black hover:bg-zinc-200 transition">
+
+          {/* query tabanlı navigation */}
+          <Link
+            href={`/blog?slug=${encodeURIComponent(post.slug)}`}
+            className="text-sm font-medium rounded-full px-3 py-1.5 bg-white text-black hover:bg-zinc-200 transition"
+            prefetch={false}
+          >
             Devamını Oku
           </Link>
         </div>

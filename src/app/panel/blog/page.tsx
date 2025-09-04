@@ -1,10 +1,8 @@
-// app/panel/blog/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BlogPost } from "../../../types/blog";
-
 import { useRef } from "react";
+import { BlogPost } from "../../../types/blog";
 
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import {
@@ -21,18 +19,22 @@ import {
   QueryDocumentSnapshot,
   DocumentData,
 } from "firebase/firestore";
-import {
-  getStorage,
-  ref,
-  deleteObject, // delete için bırakıyoruz
-} from "firebase/storage";
-
-
+import { getStorage, ref, deleteObject } from "firebase/storage";
 
 /* ===================== Firebase tekil referanslar ===================== */
- const db = getFirestore();
- const storage = getStorage();
- const auth = getAuth();
+const db = getFirestore();
+const storage = getStorage();
+const auth = getAuth();
+
+/* =========================== Config =========================== */
+const BLOG_UPLOAD_URL =
+  process.env.NEXT_PUBLIC_BLOG_UPLOAD_URL ||
+  "https://europe-west1-dilekce-destek.cloudfunctions.net/blogUpload";
+
+  
+const BLOG_DELETE_URL =
+  process.env.NEXT_PUBLIC_BLOG_DELETE_URL ||
+  "https://europe-west1-dilekce-destek.cloudfunctions.net/blogDelete";
 
 /* =============================== Helpers ============================== */
 function slugify(input: string) {
@@ -51,26 +53,8 @@ function slugify(input: string) {
 const toMs = (v: any, fallback = 0) =>
   typeof v === "number" ? v : v?.toMillis?.() ?? fallback;
 
-function extFromMime(mime: string | undefined) {
-  if (!mime) return "";
-  if (mime === "image/png") return ".png";
-  if (mime === "image/jpeg") return ".jpg";
-  if (mime === "image/webp") return ".webp";
-  if (mime === "image/gif") return ".gif";
-  return "";
-}
-function safeFilename(name: string, mime?: string) {
-  const dot = name.lastIndexOf(".");
-  const base = dot > 0 ? name.slice(0, dot) : name;
-  const givenExt = dot > 0 ? name.slice(dot).toLowerCase() : "";
-  const preferredExt = extFromMime(mime) || givenExt || ".bin";
-  return slugify(base || "kapak") + preferredExt;
-}
-
 /* ================================ Page ================================ */
 export default function BlogPage() {
-    const coverInputRef = useRef<HTMLInputElement | null>(null);
-  
   const [userId, setUserId] = useState<string | null>(null);
   const [authorName, setAuthorName] = useState<string | undefined>();
 
@@ -161,7 +145,6 @@ export default function BlogPage() {
     return () => unsub();
   }, [userId]);
 
-  /* ----------------------------- Form utils --------------------------- */
   function resetForm() {
     setTitle("");
     setContent("");
@@ -171,40 +154,33 @@ export default function BlogPage() {
     setEditing(null);
   }
 
-  /* --------- Kapak upload: API route (ID token ile, CORS’suz) --------- */
-  
-async function uploadCoverIfSelected(postId: string) {
-  // DOSYAYI STATE'TEN AL
-  const raw = coverFile;
-  if (!raw) return null;
+  /* --------- Kapak upload: DOĞRUDAN Functions (CORS) --------- */
+  const uploadCoverIfSelected = async (postId: string) => {
+    if (!coverFile) return null;
 
-  try {
-    const idToken = auth.currentUser
-      ? await auth.currentUser.getIdToken()
-      : undefined;
+    const user = auth.currentUser;
+    const idToken = user ? await user.getIdToken() : null;
+    if (!idToken) throw new Error("no-auth");
 
     const fd = new FormData();
     fd.append("postId", postId);
-    // alan adı server’da single('file') ile eşleşiyor
-    fd.append("file", raw, raw.name);
+    fd.append("file", coverFile, coverFile.name);
 
-    const res = await fetch("/api/blogUpload", {
+    const res = await fetch(BLOG_UPLOAD_URL, {
       method: "POST",
-      headers: idToken ? { Authorization: `Bearer ${idToken}` } : undefined,
-      body: fd, // Content-Type elle yazma, fetch kendisi boundary ekler
+      headers: { Authorization: `Bearer ${idToken}` }, // Content-Type YOK!
+      body: fd,
     });
 
-    const text = await res.text();
-    if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("[BLOG] cover upload via API failed:", res.status, text);
+      throw new Error(text || `upload failed: ${res.status}`);
+    }
 
-    const data = JSON.parse(text);
-    return data.url as string;
-  } catch (e) {
-    console.error("[BLOG] cover upload via API failed:", e);
-    return null;
-  }
-}
-
+    const json = await res.json();
+    return (json?.url as string) || null;
+  };
 
   /* --------------------- Upsert (create or update) -------------------- */
   async function upsertPostAndReturnId(): Promise<string> {
@@ -243,11 +219,10 @@ async function uploadCoverIfSelected(postId: string) {
       console.log("[BLOG] created post:", postId);
     }
 
-    // Kapak (varsa) — API route üzerinden
     try {
-      await uploadCoverIfSelected(postId);
-    } catch {
-      // upload hatası post'u bloklamasın
+      await uploadCoverIfSelected(postId); // Firestore güncellemesini Function yapıyor
+    } catch (e) {
+      // Upload hatası post'u bloklamasın (log zaten atıldı)
     }
 
     return postId;
@@ -259,7 +234,7 @@ async function uploadCoverIfSelected(postId: string) {
     if (!userId) return;
     setLoading(true);
     try {
-      await upsertPostAndReturnId(); // onSnapshot anında listeyi günceller
+      await upsertPostAndReturnId();
       resetForm();
     } finally {
       setLoading(false);
@@ -300,19 +275,30 @@ async function uploadCoverIfSelected(postId: string) {
     });
   }
 
-  async function handleDelete(p: BlogPost) {
-    if (!confirm("Bu yazıyı silmek istediğinizden emin misiniz?")) return;
-    try {
-      const cPath = (p as any).coverPath as string | undefined;
-      if (cPath) {
-        await deleteObject(ref(storage, cPath));
-        console.log("[BLOG] cover deleted:", cPath);
-      }
-    } catch (err) {
-      console.warn("[BLOG] cover delete warn:", err);
-    }
-    await deleteDoc(doc(db, "posts", p.id));
+async function handleDelete(p: BlogPost) {
+  if (!confirm("Bu yazıyı silmek istediğinizden emin misiniz?")) return;
+  const user = auth.currentUser;
+  const idToken = user ? await user.getIdToken() : null;
+  if (!idToken) { alert("Oturum yok"); return; }
+
+  const res = await fetch(BLOG_DELETE_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify({ postId: p.id }),
+  });
+
+  if (!res.ok) {
+    const t = await res.text();
+    console.error("[BLOG] delete failed:", res.status, t);
+    alert("Silme başarısız: " + (t || res.status));
+    return;
   }
+
+  // Realtime onSnapshot zaten listeyi güncelliyor; ekstra iş yok.
+}
 
   /* -------------------------------- UI -------------------------------- */
   return (
@@ -321,7 +307,6 @@ async function uploadCoverIfSelected(postId: string) {
         <h1 className="text-xl md:text-2xl font-semibold text-white">Blog Yönetimi</h1>
       </div>
 
-      {/* Form */}
       <div className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-5 md:p-6">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-white">
@@ -357,7 +342,6 @@ async function uploadCoverIfSelected(postId: string) {
 
         <form onSubmit={handleSave} className="mt-4 space-y-5">
           <div className="grid md:grid-cols-2 gap-5">
-            {/* Sol: metin alanları */}
             <div className="space-y-4">
               <label className="block text-sm text-zinc-300">Başlık</label>
               <input
@@ -387,7 +371,6 @@ async function uploadCoverIfSelected(postId: string) {
               />
             </div>
 
-            {/* Sağ: kapak ve aksiyonlar */}
             <div className="space-y-4">
               <label className="block text-sm text-zinc-300">Kapak Görseli</label>
               <input
@@ -398,7 +381,7 @@ async function uploadCoverIfSelected(postId: string) {
                   setCoverFile(f);
                   setCoverPreview(f ? URL.createObjectURL(f) : editing?.coverUrl || undefined);
                 }}
-                className="w-full text-sm text-zinc-200 file:mr-3 file:rounded-lg file:border file:border-zinc-700 file:bg-zinc-950 file:px-3 file:py-2 file:text-zinc-100 hover:file:bg-zinc-900"
+                className="w-full text-sm text-zinc-2 00 file:mr-3 file:rounded-lg file:border file:border-zinc-700 file:bg-zinc-950 file:px-3 file:py-2 file:text-zinc-100 hover:file:bg-zinc-900"
               />
 
               {coverPreview && (

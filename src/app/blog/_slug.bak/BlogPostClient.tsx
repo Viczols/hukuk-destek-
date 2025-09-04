@@ -3,8 +3,8 @@
 
 import React, { useEffect, useState } from "react";
 import Image from "next/image";
-// 👇 Firebase app'i mutlaka initialize et (yalnızca yan etki için import)
-import "../../../firebase/config"; // GEREKİRSE: "@/firebase/config" ya da doğru relative path
+import Link from "next/link";
+import "../../../firebase/config";
 
 import {
   getFirestore,
@@ -34,22 +34,26 @@ export default function BlogPostClient({ slug }: { slug: string }) {
   const [others, setOthers] = useState<BlogPost[]>([]);
 
   useEffect(() => {
+    let cancelled = false;
+
     (async () => {
-      // Esas yazı
+      setPost(null);
+      setOthers([]);
+
       const q1 = query(
         collection(db, "posts"),
         where("slug", "==", slug),
         limit(1)
       );
       const s1 = await getDocs(q1);
+      if (cancelled) return;
+
       if (!s1.empty) {
         const d = s1.docs[0];
         const data = d.data() as any;
         const publishedAtText = data.publishedAt
           ? new Intl.RelativeTimeFormat("tr", { numeric: "auto" }).format(
-              Math.round(
-                (data.publishedAt - Date.now()) / (1000 * 60 * 60 * 24)
-              ),
+              Math.round((data.publishedAt - Date.now()) / (1000 * 60 * 60 * 24)),
               "day"
             )
           : "";
@@ -58,7 +62,6 @@ export default function BlogPostClient({ slug }: { slug: string }) {
         setPost(null);
       }
 
-      // Diğer yazılar
       const q2 = query(
         collection(db, "posts"),
         where("status", "==", "published"),
@@ -66,15 +69,15 @@ export default function BlogPostClient({ slug }: { slug: string }) {
         limit(6)
       );
       const s2 = await getDocs(q2);
+      if (cancelled) return;
+
       const list = s2.docs
-        .filter((x) => x.data().slug !== slug)
+        .filter((x) => (x.data() as any).slug !== slug)
         .map((d) => {
           const data = d.data() as any;
           const publishedAtText = data.publishedAt
             ? new Intl.RelativeTimeFormat("tr", { numeric: "auto" }).format(
-                Math.round(
-                  (data.publishedAt - Date.now()) / (1000 * 60 * 60 * 24)
-                ),
+                Math.round((data.publishedAt - Date.now()) / (1000 * 60 * 60 * 24)),
                 "day"
               )
             : "";
@@ -82,38 +85,48 @@ export default function BlogPostClient({ slug }: { slug: string }) {
         });
       setOthers(list);
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [db, slug]);
 
   if (!post) {
     return (
-      <main className="min-h-screen bg-gradient-to-b from-zinc-950 via-zinc-900 to-zinc-900 text-zinc-100">
+      <main
+        key={slug}
+        className="min-h-screen bg-gradient-to-b from-zinc-950 via-zinc-900 to-zinc-900 text-zinc-100"
+      >
         <div className="max-w-3xl mx-auto px-4 py-16">
           <h1 className="text-2xl font-semibold">Yazı bulunamadı</h1>
           <p className="text-zinc-400 mt-2">
             Aradığınız yazı kaldırılmış ya da taşınmış olabilir.
           </p>
-          <a
+          <Link
             href="/#blog"
             className="mt-6 inline-block rounded-full bg-white text-zinc-900 px-4 py-2 hover:bg-zinc-200 transition"
           >
             Anasayfa’ya dön
-          </a>
+          </Link>
         </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-zinc-950 via-zinc-900 to-zinc-900 text-zinc-100">
+    <main
+      key={slug}
+      className="min-h-screen bg-gradient-to-b from-zinc-950 via-zinc-900 to-zinc-900 text-zinc-100"
+    >
       <div className="max-w-6xl mx-auto px-4 py-12 md:py-16">
         <div className="grid md:grid-cols-[2fr_1fr] gap-8 lg:gap-12">
           <article>
-            <a
+            <Link
               href="/#blog"
               className="text-sm text-zinc-400 hover:text-zinc-200 transition"
             >
               ← Anasayfa’ya dön
-            </a>
+            </Link>
 
             <h1 className="mt-3 text-3xl md:text-4xl font-semibold tracking-tight text-white">
               {post.title}
@@ -129,6 +142,7 @@ export default function BlogPostClient({ slug }: { slug: string }) {
                   alt={post.title}
                   fill
                   className="object-cover"
+                  unoptimized
                 />
               </div>
             )}
@@ -152,39 +166,27 @@ export default function BlogPostClient({ slug }: { slug: string }) {
           </article>
 
           <aside className="md:sticky md:top-24 h-max">
-            <h3 className="text-lg font-semibold mb-3 text-white">
-              Diğer Yazılar
-            </h3>
+            <h3 className="text-lg font-semibold mb-3 text-white">Diğer Yazılar</h3>
             <div className="space-y-3">
               {others.map((p) => (
-                <a
+                <Link
                   key={p.id}
-                  href={`/blog/${p.slug}/`}
+                  href={`/blog?slug=${encodeURIComponent(p.slug)}`} // ⬅️ query format
                   className="flex gap-3 rounded-xl border border-white/10 bg-white/5 backdrop-blur hover:bg-white/10 transition p-2"
+                  prefetch={false}
                 >
                   <div className="relative w-20 h-14 shrink-0 overflow-hidden rounded-lg">
                     {p.coverUrl ? (
-                      <Image
-                        src={p.coverUrl}
-                        alt={p.title}
-                        fill
-                        className="object-cover"
-                      />
+                      <Image src={p.coverUrl} alt={p.title} fill className="object-cover" unoptimized />
                     ) : (
-                      <div className="absolute inset-0 grid place-items-center text-zinc-400">
-                        —
-                      </div>
+                      <div className="absolute inset-0 grid place-items-center text-zinc-400">—</div>
                     )}
                   </div>
                   <div className="min-w-0">
-                    <div className="text-sm font-medium text-zinc-100 line-clamp-2">
-                      {p.title}
-                    </div>
-                    <div className="text-xs text-zinc-400 mt-0.5">
-                      {p.publishedAtText}
-                    </div>
+                    <div className="text-sm font-medium text-zinc-100 line-clamp-2">{p.title}</div>
+                    <div className="text-xs text-zinc-400 mt-0.5">{p.publishedAtText}</div>
                   </div>
-                </a>
+                </Link>
               ))}
             </div>
           </aside>

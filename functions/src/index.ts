@@ -9,7 +9,9 @@ import multer from "multer";
 import { onRequest } from "firebase-functions/v2/https";
 import { defineSecret, defineString } from "firebase-functions/params";
 
-import * as mime from "mime-types";
+
+
+
 
 
 // Üste bir yardımcı ekleyin (dosyanın başına da koyabilirsiniz)
@@ -76,6 +78,27 @@ app.use(express.urlencoded({ extended: true }));
 
 
 
+
+
+
+
+
+
+
+
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
+
+
+
+
+
+
+
+ 
+
+
 // ---- Multer (memory) ----
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -87,42 +110,6 @@ const upload = multer({
 });
 
 
-// ---- Yardımcılar ----
-
-const blogUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { files: 1, fileSize: 25 * 1024 * 1024 }, // 25MB
-  fileFilter: (_req, file, cb) => {
-    const ok =
-      file.mimetype === "image/png" ||
-      file.mimetype === "image/jpeg" ||
-      file.mimetype === "image/webp" ||
-      file.mimetype === "image/gif" ||
-      file.mimetype === "image/avif";
-    if (!ok) return cb(new Error("Sadece resim dosyaları kabul edilir"));
-    cb(null, true);
-  },
-});
-
-// Güvenli isimlendirme
-function safeName(name: string) {
-  const dot = name.lastIndexOf(".");
-  const base = (dot > 0 ? name.slice(0, dot) : name)
-    .toLowerCase()
-    .trim()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[ğĞ]/g, "g")
-    .replace(/[üÜ]/g, "u")
-    .replace(/[şŞ]/g, "s")
-    .replace(/[ıİ]/g, "i")
-    .replace(/[öÖ]/g, "o")
-    .replace(/[çÇ]/g, "c")
-    .replace(/[^a-z0-9.-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const ext = dot > 0 ? name.slice(dot).toLowerCase() : "";
-  return (base || "kapak") + (ext || "");
-}
 
 /* -------------------- 1) Ödeme başlatma (Iyzico Checkout Form) -------------------- */
 // ▶ /createSession — purchases yerine paymentIntents aç
@@ -425,50 +412,6 @@ app.all("/paymentCallback", async (req, res): Promise<void> => {
 
 
 /* -------------------- 3) Blog kapak yükleme (multipart) -------------------- */
-app.post("/blogUpload", blogUpload.single("file"), async (req, res) => {
-  try {
-    const postId = (req.body?.postId as string) || "";
-    const f = req.file;
-    if (!postId || !f) {
-      return res
-        .status(400)
-        .json({ error: "bad-request", message: "postId ve file zorunlu" });
-    }
-
-    const bucket = admin.storage().bucket();
-    const ext =
-      (mime.extension(f.mimetype || "") as string | false) ||
-      (f.originalname.split(".").pop() || "bin");
-    const fname = safeName(f.originalname || `cover.${ext}`);
-    const path = `blog/${postId}/${Date.now()}-${fname}`;
-
-    await bucket.file(path).save(f.buffer, {
-      contentType: f.mimetype || "application/octet-stream",
-      metadata: {
-        cacheControl: "public, max-age=31536000, immutable",
-      },
-    });
-
-    // İstersen public URL veya signed URL üret:
-    // Public ise: await bucket.file(path).makePublic(); const url = `https://storage.googleapis.com/${bucket.name}/${path}`
-    // Aşağıda signed url:
-    const [url] = await bucket
-      .file(path)
-      .getSignedUrl({
-        action: "read",
-        expires: Date.now() + 365 * 24 * 3600 * 1000,
-      });
-
-    return res.json({ url, path });
-  } catch (err: any) {
-    console.error("blogUpload error:", err);
-    return res
-      .status(500)
-      .json({ error: "upload-failed", message: String(err?.message || err) });
-  }
-});
-
-
 
 
 /* -------------------- Dilekçe yükleme (multipart + raw) -------------------- */
@@ -684,6 +627,11 @@ app.post("/sendEmail", async (req, res): Promise<void> => {
     return;
   }
 });
+
+
+export { blogUpload } from "./blogUpload";
+
+export { blogDelete } from "./blogDelete";
 
 
 /* -------------------- Export (v2) -------------------- */
