@@ -19,17 +19,18 @@ export default function Hero() {
       ctaLabel: "Paketleri Gör",
       ctaAction: () => scrollToId("paketler"),
     },
+    // ⬇️ 2. SLAYT GÜNCELLENDİ: Online Danışma + /danismanlik
     {
-      title: "Hızlı Danışma (5–15 dk)",
-      desc: "Kısa görüşme paketleri ile net yanıt, net yol haritası.",
+      title: "Online Danışma",
+      desc: "Avukatlarımızla online görüşme — hızlı, güvenli randevu.",
       img: "/images/ChatGPT Image 15 Ağu 2025 16_18_37.png",
-      ctaLabel: "Danışma Paketleri",
-      ctaAction: () => scrollToId("paketler"),
+      ctaLabel: "Online Danışma",
+      ctaAction: () => (window.location.href = "/danismanlik"),
     },
     {
       title: "AI Destekli Süreç",
       desc: "Süreç boyunca akıllı öneriler, daha hızlı ilerleme.",
-      img: "/images/istockphoto-1328608958-612x612.jpg",
+      img: "/images/779d4401-61c7-4667-bfc8-7394d2c55066.png",
       ctaLabel: "SSS’yi Aç",
       ctaAction: () => (window.location.hash = "sss"),
     },
@@ -40,7 +41,7 @@ export default function Hero() {
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  // Slider görünürlük takibi (görünürde değilken autoplay/scroll devre dışı)
+  // Slider görünürlük takibi
   useEffect(() => {
     const target = sectionRef.current;
     if (!target || typeof IntersectionObserver === "undefined") return;
@@ -55,7 +56,7 @@ export default function Hero() {
     return () => io.disconnect();
   }, []);
 
-  // Autoplay: yalnızca görünürdeyken ve hover yokken
+  // Autoplay
   useEffect(() => {
     const pageVisible =
       typeof document !== "undefined" ? document.visibilityState === "visible" : true;
@@ -69,21 +70,21 @@ export default function Hero() {
     };
   }, [isHover, inView, slides.length]);
 
-  // Aktif slayta yatay kaydır (görünürde değilse tetikleme)
+  // Aktif slayta yatay kaydır
   useEffect(() => {
     if (!inView) return;
     const el = wrapperRef.current;
     if (!el) return;
     const child = el.children[index] as HTMLElement | undefined;
-      if (child) {
-    const left = child.offsetLeft;
-    if (typeof el.scrollTo === "function") {
-      el.scrollTo({ left, behavior: "smooth" });
-    } else {
-      (el as any).scrollLeft = left;
+    if (child) {
+      const left = child.offsetLeft;
+      if (typeof el.scrollTo === "function") {
+        el.scrollTo({ left, behavior: "smooth" });
+      } else {
+        (el as any).scrollLeft = left;
+      }
     }
-  }
-}, [index, inView]);
+  }, [index, inView]);
 
   return (
     <section
@@ -95,14 +96,8 @@ export default function Hero() {
       {/* SLIDER */}
       <div
         ref={wrapperRef}
-        // snap-x / snap-mandatory KALDIRILDI
         className="flex overflow-x-auto overflow-y-hidden scroll-smooth no-scrollbar w-full touch-pan-y"
-        style={{
-          scrollBehavior: "smooth",
-          // yatay overscroll'u engelle, dikeyi serbest bırak
-          overscrollBehaviorX: "contain",
-          overscrollBehaviorY: "auto",
-        }}
+        style={{ scrollBehavior: "smooth", overscrollBehaviorX: "contain", overscrollBehaviorY: "auto" }}
         aria-roledescription="carousel"
         aria-label="Tanıtım slaytları"
       >
@@ -114,13 +109,8 @@ export default function Hero() {
             aria-roledescription="slide"
             aria-label={`${i + 1} / ${slides.length}`}
           >
-            {/* Arka plan görseli */}
             <Image src={s.img} alt={s.title} fill priority={i === 0} className="object-cover" />
-
-            {/* Karartma */}
             <div className="absolute inset-0 bg-black/40" />
-
-            {/* İçerik */}
             <div className="relative z-10 max-w-2xl text-center text-white px-4">
               <h1 className="text-2xl md:text-4xl font-semibold tracking-tight mb-4 drop-shadow-lg">
                 {s.title}
@@ -152,7 +142,7 @@ export default function Hero() {
         ))}
       </div>
 
-      {/* Oklar (container tıklamayı engellemesin) */}
+      {/* Oklar */}
       <div className="absolute inset-y-0 left-0 right-0 flex items-center justify-between px-4 z-20 pointer-events-none">
         <button
           onClick={() => setIndex((i) => (i - 1 + slides.length) % slides.length)}
@@ -174,7 +164,6 @@ export default function Hero() {
         </button>
       </div>
 
-      {/* scrollbar gizleme */}
       <style jsx global>{`
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
