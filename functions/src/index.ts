@@ -634,6 +634,9 @@ export { blogUpload } from "./blogUpload";
 export { blogDelete } from "./blogDelete";
 
 
+export { ai } from "./ai";
+
+
 /* -------------------- Export (v2) -------------------- */
 export const api = onRequest(
   {

@@ -26,3 +26,5 @@ export const dbRealtime = getDatabase(app);
 export const dbFirestore = getFirestore(app);
 
 export const storage = getStorage(app);
+
+export default app;

@@ -1,8 +1,8 @@
-// src/components/PurchaseHistoryModal.tsx
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
 import Modal from "./Modal";
+import AIDilekceModal from "../app/AIDilekce/AIDilekceModal"; // ← YENİ: AI sihirbaz modalı
 import { auth, dbRealtime } from "../firebase/config";
 import {
   getFirestore,
@@ -16,6 +16,7 @@ import {
   getDoc,
   setDoc,
   serverTimestamp,
+  onSnapshot, // ← ai.state takibi için
 } from "firebase/firestore";
 import { ref as rtdbRef, onValue, set as rtdbSet } from "firebase/database";
 
@@ -27,35 +28,28 @@ interface Props {
 
 interface Purchase {
   id: string;
-  type: string;                 // legacy type / productKey fallback
-  productKey?: string | null;   // 🔁 eklendi
+  type: string;
+  productKey?: string | null;
   productType?: string;
-  status: string;               // completed / pending / ...
+  status: string;
   createdAt: number;
   storagePath?: string;
   downloadUrl?: string;
-  deliveredPdfUrl?: string | null; // 🔁 eklendi (Orders / Functions yazıyor)
+  deliveredPdfUrl?: string | null;
 }
 
-/* ------------------------------------------------------------------
-   Yardımcı: Timestamp/Date/number -> ms
--------------------------------------------------------------------*/
+/* ------------------------------------------------------------------ */
 function toMillis(v: any): number {
   if (!v) return 0;
   if (typeof v === "number") return v;
   if (typeof v?.toMillis === "function") return v.toMillis();
   if (typeof v?.toDate === "function") {
-    try {
-      return v.toDate().getTime();
-    } catch {}
+    try { return v.toDate().getTime(); } catch {}
   }
   if (typeof v?.seconds === "number") return v.seconds * 1000;
   return 0;
 }
 
-/* ------------------------------------------------------------------
-   Yardımcı: ürün etiketi
--------------------------------------------------------------------*/
 function productLabel(key?: string | null, type?: string | null) {
   const k = String((key || type || "")).toLowerCase();
   switch (k) {
@@ -75,61 +69,14 @@ function productLabel(key?: string | null, type?: string | null) {
   }
 }
 
-/* ------------------------------------------------------------------
-   Yardımcı: Türkçe/İngilizce durumları tek tipe çevir
--------------------------------------------------------------------*/
 type NormalizedStatus = "pending" | "completed" | "failed";
-
 function normalizeStatus(raw?: string): NormalizedStatus {
   const s = (raw || "").toLowerCase().trim();
-
-  // Pending
-  if (
-    [
-      "pending",
-      "beklemede",
-      "hazırlanıyor",
-      "hazirlaniyor",
-      "hazirlanıyor",
-      "processing",
-      "created",
-      "open",
-      "awaiting_payment",
-      "awaiting",
-      "in_progress",
-    ].includes(s)
-  ) {
-    return "pending";
-  }
-
-  // Completed
-  if (
-    [
-      "completed",
-      "paid",
-      "success",
-      "başarılı",
-      "basarili",
-      "tamamlandı",
-      "tamamlandi",
-      "ödendi",
-      "odendi",
-      "done",
-    ].includes(s)
-  ) {
-    return "completed";
-  }
-
-  // Failed
-  if (
-    ["failed", "error", "iptal", "canceled", "cancelled", "başarısız", "basarisiz", "refused"].includes(s)
-  ) {
-    return "failed";
-  }
-
+  if (["pending","beklemede","hazırlanıyor","hazirlaniyor","hazirlanıyor","processing","created","open","awaiting_payment","awaiting","in_progress"].includes(s)) return "pending";
+  if (["completed","paid","success","başarılı","basarili","tamamlandı","tamamlandi","ödendi","odendi","done"].includes(s)) return "completed";
+  if (["failed","error","iptal","canceled","cancelled","başarısız","basarisiz","refused"].includes(s)) return "failed";
   return "pending";
 }
-
 function statusLabelTr(norm: NormalizedStatus, isAI: boolean) {
   if (norm === "pending") return isAI ? "hazırlanıyor" : "beklemede";
   if (norm === "completed") return "tamamlandı";
@@ -137,6 +84,11 @@ function statusLabelTr(norm: NormalizedStatus, isAI: boolean) {
   return "beklemede";
 }
 
+function ClientTime({ ms }: { ms: number }) {
+  const [txt, setTxt] = useState<string>("");
+  useEffect(() => { if (ms) setTxt(new Date(ms).toLocaleString()); }, [ms]);
+  return <>{txt || "-"}</>;
+}
 /* ------------------------------------------------------------------*/
 
 export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: Props) {
@@ -144,7 +96,9 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
   const [formattedDates, setFormattedDates] = useState<Record<string, string>>({});
   const [onlineLawyerCount, setOnlineLawyerCount] = useState(0);
 
-  // Upload (opsiyonel; mevcut UI davranışını koruyoruz)
+  const [aiStates, setAiStates] = useState<Record<string, string>>({});
+  const [aiModalPurchaseId, setAiModalPurchaseId] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [pendingUploadId, setPendingUploadId] = useState<string | null>(null);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
@@ -161,7 +115,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
     return () => unsubscribe();
   }, []);
 
-  // --- Firestore: purchases (ORDER BY createdAt)
+  // --- Firestore: purchases
   useEffect(() => {
     const fetchPurchases = async () => {
       if (!auth.currentUser) return;
@@ -177,13 +131,13 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
         return {
           id: d.id,
           type: data.productKey || data.type || "dilekce",
-          productKey: data.productKey ?? null,                         // 🔁
+          productKey: data.productKey ?? null,
           productType: data.productType || "",
           status: data.status ?? "pending",
           createdAt: toMillis(data.createdAt),
           storagePath: data.deliveredPdfPath || data.storagePath || "",
-          downloadUrl: data.downloadUrl || "",                         // legacy alan
-          deliveredPdfUrl: data.deliveredPdfUrl ?? null,               // 🔁 yeni alan
+          downloadUrl: data.downloadUrl || "",
+          deliveredPdfUrl: data.deliveredPdfUrl ?? null,
         };
       });
       setPurchases(list);
@@ -198,12 +152,28 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
     setFormattedDates(mapping);
   }, [purchases]);
 
-  // --- (YENİ) Sohbet için ticket oluştur/garanti et
+  // --- Her satın alma için ai.state'i canlı dinle
+  useEffect(() => {
+    if (purchases.length === 0) return;
+    const db = getFirestore();
+    const unsubs = purchases.map((p) => {
+      const ref = doc(db, "purchases", p.id, "meta", "ai");
+      return onSnapshot(ref, (snap) => {
+        const st = (snap.data()?.state as string) || "idle";
+        setAiStates((prev) => (prev[p.id] === st ? prev : { ...prev, [p.id]: st }));
+      });
+    });
+    return () => unsubs.forEach((u) => u && u());
+  }, [purchases]);
+
+  const openAIModal = (pid: string) => setAiModalPurchaseId(pid);
+  const closeAIModal = () => setAiModalPurchaseId(null);
+
+  // --- Chat (mevcut)
   async function ensureTicketForPurchase(purchaseId: string) {
     if (!auth.currentUser) throw new Error("Oturum bulunamadı.");
     const db = getFirestore();
 
-    // Satın alma dokümanını oku
     const pRef = doc(db, "purchases", purchaseId);
     const pSnap = await getDoc(pRef);
     if (!pSnap.exists()) throw new Error("Satın alma bulunamadı.");
@@ -212,7 +182,6 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
     const productKey = pdata.productKey || pdata.type || "uzman";
     const productType = pdata.productType || productLabel(productKey, pdata.productType);
 
-    // Firestore tickets/{purchaseId}
     const tRef = doc(db, "tickets", purchaseId);
     await setDoc(
       tRef,
@@ -230,7 +199,6 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
       { merge: true }
     );
 
-    // (Opsiyonel) RTDB tarafı da varsa
     try {
       await rtdbSet(rtdbRef(dbRealtime, `tickets/${purchaseId}`), {
         purchaseId,
@@ -241,12 +209,8 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
         assignedLawyerId: null,
         createdAt: Date.now(),
       });
-    } catch {
-      // RTDB yoksa sessiz geç
-    }
+    } catch {}
   }
-
-  // --- Chat
   const handleStartChat = async (pid: string) => {
     if (onlineLawyerCount === 0) {
       alert("Şu anda çevrim içi uzman bulunmuyor. Hafta içi 09:00–18:00 arasında tekrar deneyebilirsiniz.");
@@ -262,7 +226,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
     }
   };
 
-  // --- PDF Upload (kullanıcı tarafında da bırakıyoruz; istersen kaldırabilirsin)
+  // --- PDF Upload (mevcut)
   function openFileDialog(purchaseId: string) {
     setPendingUploadId(purchaseId);
     fileInputRef.current?.click();
@@ -284,7 +248,6 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
       fd.append("purchaseId", purchaseId);
       fd.append("file", file);
 
-      // Not: Kullanıcı modalından yükleme, backend’de yetki kontrolüne tabi.
       const res = await fetch("/api/upload-petition", { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Yükleme başarısız");
@@ -297,7 +260,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
                 status: "completed",
                 storagePath: data.storagePath || p.storagePath,
                 downloadUrl: data.downloadUrl || p.downloadUrl,
-                deliveredPdfUrl: data.deliveredPdfUrl || data.pdfUrl || p.deliveredPdfUrl || null, // 🔁
+                deliveredPdfUrl: data.deliveredPdfUrl || data.pdfUrl || p.deliveredPdfUrl || null,
               }
             : p
         )
@@ -339,11 +302,10 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
             <ul className="divide-y divide-white/10">
               {purchases.map((p) => {
                 const key = (p.productKey || p.type || "").toLowerCase();
-                const isAI = key === "dilekce";
+                const isAI = ["dilekce", "ai", "ai-dilekce"].includes(key);
                 const isUzman = key === "uzman";
                 const isGorusme = key === "gorusme";
 
-                // durum
                 const norm = normalizeStatus(p.status);
                 const isCompleted = norm === "completed";
                 const isPending = norm === "pending";
@@ -351,9 +313,11 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
                 const statusText = statusLabelTr(norm, isAI);
 
                 const title = productLabel(p.productKey, p.productType);
-
-                // PDF URL (yeni alan öncelikli)
                 const pdfUrl = p.deliveredPdfUrl || p.downloadUrl || "";
+
+                const aiState = aiStates[p.id] || "idle";
+                const showAIBtn = isAI && isPending && aiState !== "awaiting_review";
+                const showAIReviewBadge = isAI && aiState === "awaiting_review";
 
                 return (
                   <li key={p.id} className="py-3 flex items-start justify-between gap-4">
@@ -369,7 +333,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
                         >
                           {statusText}
                         </span>{" "}
-                        • Tarih: {p.createdAt ? new Date(p.createdAt).toLocaleString() : "-"}
+                        • Tarih: <ClientTime ms={p.createdAt} />
                       </p>
 
                       {/* PDF indir: yalnızca TAMAMLANDI ve URL varsa */}
@@ -401,8 +365,29 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
                         </span>
                       )}
 
+                      {/* AI - Avukat inceleme rozeti */}
+                      {showAIReviewBadge && (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-xs text-sky-300">
+                          <svg width="14" height="14" viewBox="0 0 24 24" className="fill-current">
+                            <path d="M12 2a10 10 0 1 0 10 10A10.011 10.011 0 0 0 12 2zm1 15h-2v-2h2zm0-4h-2V7h2z" />
+                          </svg>
+                          İncelemede
+                        </span>
+                      )}
+
+                      {/* AI - Dilekçeyi Yazdır (modal) */}
+                      {showAIBtn && (
+                        <button
+                          onClick={() => openAIModal(p.id)}
+                          className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium bg-white text-zinc-900 hover:bg-zinc-200"
+                          title="Yapay zekâ ile dilekçe oluştur"
+                        >
+                          ✍️ Dilekçeyi Yazdır
+                        </button>
+                      )}
+
                       {/* Görüşme/Uzman paketi için sohbet */}
-                      {isPending && (isGorusme || isUzman) && (
+                      {normalizeStatus(p.status) === "pending" && (isGorusme || isUzman) && (
                         <button
                           onClick={() => handleStartChat(p.id)}
                           disabled={onlineLawyerCount === 0}
@@ -426,6 +411,15 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
           </div>
         )}
       </div>
+
+      {/* AI MODAL */}
+      {aiModalPurchaseId && (
+        <AIDilekceModal
+          open={true}
+          purchaseId={aiModalPurchaseId}
+          onClose={closeAIModal}
+        />
+      )}
 
       {/* koyu scrollbar */}
       <style jsx global>{`
