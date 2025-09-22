@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import Modal from "./Modal";
-import AIDilekceModal from "../app/AIDilekce/AIDilekceModal"; // ← YENİ: AI sihirbaz modalı
+import AIDilekceModal from "../app/AIDilekce/AIDilekceModal" // yol projene göre
 import { auth, dbRealtime } from "../firebase/config";
 import {
   getFirestore,
@@ -11,12 +11,11 @@ import {
   where,
   getDocs,
   orderBy,
-  // ticket oluşturmak için
   doc,
   getDoc,
   setDoc,
   serverTimestamp,
-  onSnapshot, // ← ai.state takibi için
+  onSnapshot,
 } from "firebase/firestore";
 import { ref as rtdbRef, onValue, set as rtdbSet } from "firebase/database";
 
@@ -96,7 +95,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
   const [formattedDates, setFormattedDates] = useState<Record<string, string>>({});
   const [onlineLawyerCount, setOnlineLawyerCount] = useState(0);
 
-  const [aiStates, setAiStates] = useState<Record<string, string>>({});
+  const [aiMetaMap, setAiMetaMap] = useState<Record<string, {state?: string; draftDocxUrl?: string; firstSuccessAt?: any}>>({});
   const [aiModalPurchaseId, setAiModalPurchaseId] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -152,15 +151,16 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
     setFormattedDates(mapping);
   }, [purchases]);
 
-  // --- Her satın alma için ai.state'i canlı dinle
+  // --- Her satın alma için meta.ai'yi canlı dinle (doküman içinden)
   useEffect(() => {
     if (purchases.length === 0) return;
     const db = getFirestore();
     const unsubs = purchases.map((p) => {
-      const ref = doc(db, "purchases", p.id, "meta", "ai");
+      const ref = doc(db, "purchases", p.id);
       return onSnapshot(ref, (snap) => {
-        const st = (snap.data()?.state as string) || "idle";
-        setAiStates((prev) => (prev[p.id] === st ? prev : { ...prev, [p.id]: st }));
+        const d: any = snap.data() || {};
+        const ai = d?.meta?.ai || {};
+        setAiMetaMap((prev) => ({ ...prev, [p.id]: { state: ai.state, draftDocxUrl: ai.draftDocxUrl, firstSuccessAt: ai.firstSuccessAt }}));
       });
     });
     return () => unsubs.forEach((u) => u && u());
@@ -211,6 +211,7 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
       });
     } catch {}
   }
+
   const handleStartChat = async (pid: string) => {
     if (onlineLawyerCount === 0) {
       alert("Şu anda çevrim içi uzman bulunmuyor. Hafta içi 09:00–18:00 arasında tekrar deneyebilirsiniz.");
@@ -315,8 +316,11 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
                 const title = productLabel(p.productKey, p.productType);
                 const pdfUrl = p.deliveredPdfUrl || p.downloadUrl || "";
 
-                const aiState = aiStates[p.id] || "idle";
-                const showAIBtn = isAI && isPending && aiState !== "awaiting_review";
+                const aiMeta = aiMetaMap[p.id] || {};
+                const aiState = aiMeta.state || "idle";
+                const alreadySent = aiState === "awaiting_review" || !!aiMeta.firstSuccessAt;
+
+                const showAIBtn = isAI && isPending && !alreadySent;
                 const showAIReviewBadge = isAI && aiState === "awaiting_review";
 
                 return (
@@ -335,6 +339,22 @@ export default function PurchaseHistoryModal({ isOpen, onClose, onStartChat }: P
                         </span>{" "}
                         • Tarih: <ClientTime ms={p.createdAt} />
                       </p>
+
+                      {/* DOCX taslak linki: İncelemede/ilk gönderimden sonra görünür */}
+                      {isAI && alreadySent && aiMeta.draftDocxUrl && (
+                        <a
+                          href={aiMeta.draftDocxUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-2 text-sm text-sky-300 hover:text-sky-200 mt-1"
+                          title="Taslak DOCX’i aç"
+                        >
+                          <svg width="16" height="16" viewBox="0 0 24 24" className="fill-current">
+                            <path d="M4 4h10l6 6v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zm9 1.5V10h4.5L13 5.5z" />
+                          </svg>
+                          Taslak DOCX’i Aç
+                        </a>
+                      )}
 
                       {/* PDF indir: yalnızca TAMAMLANDI ve URL varsa */}
                       {isCompleted && pdfUrl && (

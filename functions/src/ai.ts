@@ -1,484 +1,319 @@
 // functions/src/ai.ts
-import express, { Request, Response, NextFunction } from "express";
 import { onRequest } from "firebase-functions/v2/https";
-import { defineSecret } from "firebase-functions/params";
-import { cert, getApps, initializeApp, ServiceAccount } from "firebase-admin/app";
-import { getFirestore, FieldValue, Firestore } from "firebase-admin/firestore";
-import { getStorage } from "firebase-admin/storage";
-import { Document, Packer, Paragraph, HeadingLevel } from "docx";
+import * as logger from "firebase-functions/logger";
+import * as admin from "firebase-admin";
+import express from "express";
+import cors from "cors";
 import OpenAI from "openai";
-import { randomUUID } from "crypto";
 
-// ─────────────────────────────────────────────────────────────
-// Secrets
-// ─────────────────────────────────────────────────────────────
-const FIREBASE_ADMIN_JSON_B64 = defineSecret("FIREBASE_ADMIN_JSON_B64");
-const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
+/* ============================ Firebase init ============================ */
+try { admin.initializeApp(); } catch {}
+const db = admin.firestore();
+const bucket = admin.storage().bucket();
 
-// ─────────────────────────────────────────────────────────────
-// Firebase Admin init (lazy)
-// ─────────────────────────────────────────────────────────────
-let Admin: { db: Firestore; FieldValue: typeof FieldValue } | null = null;
+/* ================================ Config =============================== */
+const REGION = "europe-west1";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 
-function ensureAdmin(b64FromParam?: string | null) {
-  if (!Admin) {
-    const b64 = (b64FromParam ?? undefined) || process.env.FIREBASE_ADMIN_JSON_B64 || "";
-    if (!getApps().length) {
-      if (!b64) throw new Error("FIREBASE_ADMIN_JSON_B64 secret is missing");
-      const json = Buffer.from(b64, "base64").toString("utf8");
-      const sa = JSON.parse(json) as ServiceAccount;
-      // storageBucket belirtmek istersen .env’de STORAGE_BUCKET tanımlayabilirsin
-      initializeApp({ credential: cert(sa) });
-    }
-    Admin = { db: getFirestore(), FieldValue };
-  }
-  return Admin!;
-}
-
-const purchaseRef = (id: string) => ensureAdmin().db.doc(`purchases/${id}`);
-
-// ─────────────────────────────────────────────────────────────
-// OpenAI init (lazy) — key yoksa null döner, mock’a düşeriz
-// ─────────────────────────────────────────────────────────────
-let openai: OpenAI | null = null;
-function ensureOpenAI(apiKeyFromParam?: string | null) {
-  const key = (apiKeyFromParam ?? undefined) || process.env.OPENAI_API_KEY;
-  if (!key) return null;
-  if (!openai) openai = new OpenAI({ apiKey: key });
-  return openai;
-}
-
-// ─────────────────────────────────────────────────────────────
-// Express App & yardımcılar
-// ─────────────────────────────────────────────────────────────
+/* =============================== Express ============================== */
 const app = express();
+app.use(cors({ origin: true }));
 app.use(express.json({ limit: "4mb" }));
 
-type AsyncHandler = (req: Request, res: Response) => Promise<void>;
-const asyncRoute =
-  (fn: AsyncHandler) => (req: Request, res: Response, next: NextFunction) =>
-    fn(req, res).catch(next);
-
-function mustHave<T extends object>(req: Request, keys: (keyof T)[]) {
-  const src = (req.body ?? {}) as any;
-  for (const k of keys) if (src[k as string] == null) throw new Error(`Eksik alan: ${String(k)}`);
-  return src as T;
+/* ============================== Utilities ============================= */
+function getOpenAI(): OpenAI {
+  const key =
+    process.env.OPENAI_API_KEY ||
+    (process as any).env?.OPENAI_APIKEY ||
+    (process as any).env?.OPENAI_Key;
+  if (!key) throw new Error("OPENAI_API_KEY tanımlı değil");
+  return new OpenAI({ apiKey: key as string });
 }
 
-// ─────────────────────────────────────────────────────────────
-// Türler & mock taslak üretici
-// ─────────────────────────────────────────────────────────────
-type Category = "arabuluculuk" | "icra" | "delil_tanik" | "kira_tahliye" | string;
-
-type DraftSections = {
-  baslik: string;
-  taraflar: string;      // satırlar \n ile
-  konu: string;
-  aciklamalar: string[]; // paragraflar
-  hukuki_sebepler?: string[];
-  deliller?: string[];
-  sonuc_istem: string;
-  ekler?: string[];
-};
-
-function asName(v: any) {
-  if (!v) return "";
-  if (typeof v === "string") return v.trim();
-  if (v.ad || v.soyad) return `${v.ad ?? ""} ${v.soyad ?? ""}`.trim();
-  return String(v);
-}
-function asTC(v: any) {
-  return v ? `TC: ${String(v)}` : "";
+// Sadece izinli HTML etiketleri kalsın
+const ALLOWED_TAGS = new Set([
+  "h1","h2","p","ul","ol","li","strong","em","br","table","thead","tbody","tr","th","td"
+]);
+function sanitizeAllowedTags(html: string): string {
+  if (!html) return "";
+  // script/style/link kökten sil
+  html = html.replace(/<\/?(script|style|link)[^>]*>/gi, "");
+  // izinli olmayan tagları kaldır (içerikleri kalsın)
+  return html.replace(/<\/?([a-z0-9]+)(\s[^>]*)?>/gi, (m, tag) =>
+    ALLOWED_TAGS.has(String(tag).toLowerCase()) ? m : ""
+  );
 }
 
-function buildMockSections(category: Category, input: Record<string, any>): DraftSections {
-  const davaci = input.davaci || input.basvuran || input.kirayaVeren || {};
-  const davali = input.davali || input.karsiTaraf || input.kiraci || {};
-  const mahkeme = input.mahkeme || input.icraDairesi || input.arabuluculukBurosu || "İLGİLİ MERCİ";
-  const dosyaNo = input.dosyaNo ? `Dosya No: ${input.dosyaNo}` : "";
-  const konuSatiri = input.konu || input.basvuruKonusu || input.talepKonu || "Dilekçe konusu";
+function tryParseJson<T = any>(s: string): T | null {
+  try { return JSON.parse(s); } catch { return null; }
+}
 
-  const baslik = `${mahkeme}`;
-  const taraflar = [
-    `Davacı/Başvuran: ${asName(davaci)} ${asTC(davaci.tc)}`.trim(),
-    `Davalı/Karşı Taraf: ${asName(davali)} ${asTC(davali.tc)}`.trim(),
-  ].join("\n");
+// Eski JSON taslak şemasından HTML’e koruma dönüşümü
+function jsonDraftToHtml(obj: any): string {
+  const baslik = obj?.baslik || "";
+  const konu = obj?.konu || "";
+  const aciklamalar: string[] = Array.isArray(obj?.aciklamalar) ? obj.aciklamalar : [];
+  const hukuki: string[] = Array.isArray(obj?.hukuki_sebepler) ? obj.hukuki_sebepler : [];
+  const deliller: string[] = Array.isArray(obj?.deliller) ? obj.deliller : [];
+  const sonuc: any = obj?.sonuc_istem;
 
-  switch (category) {
-    case "arabuluculuk":
-      return {
-        baslik,
-        taraflar,
-        konu: `Konu: ${konuSatiri} hakkında arabuluculuk başvurusu`,
-        aciklamalar: [
-          `Müvekkil ${asName(davaci)} ile karşı taraf ${asName(davali)} arasında ${input.iliskininTuru || "hukuki ilişki"} bulunmaktadır.`,
-          `Uyuşmazlık; ${input.uyusmazlikOzet || "alacak/işçilik/kira vb."} konularında ortaya çıkmış olup, tarafların dostane şekilde çözüme ulaştırılması amacıyla arabuluculuk sürecinin başlatılması talep edilmektedir.`,
-        ],
-        hukuki_sebepler: ["6325 sayılı Hukuk Uyuşmazlıklarında Arabuluculuk Kanunu", "İlgili mevzuat"],
-        deliller: ["Sözleşmeler", "Yazışmalar", "Tanık beyanları", "Her türlü yasal delil"],
-        sonuc_istem: "Arabuluculuk başvurumuzun kabulü ile taraflara arabulucu huzurunda görüşme davetiyesi çıkartılmasına karar verilmesini saygıyla talep ederiz.",
-      };
-
-    case "icra":
-      return {
-        baslik,
-        taraflar,
-        konu: `Konu: ${konuSatiri} (İcra takibine ilişkin beyan/itiraz)`,
-        aciklamalar: [
-          `${input.icraDairesi || "İcra Dairesi"} nezdinde ${dosyaNo} sayılı dosya ile tarafımıza tebliğ edilen ödeme emrine karşı itirazlarımızı sunmaktayız.`,
-          `Borç kalemleri ve faiz hesaplamasında hukuka aykırılıklar mevcuttur. Özellikle ${input.itirazGerekcesi || "miktar/faiz/yetki/imza itirazları"} yönünden itiraz ediyoruz.`,
-        ],
-        hukuki_sebepler: ["2004 sayılı İcra ve İflas Kanunu", "TBK", "HMK"],
-        deliller: ["Takip dosyası kapsamı", "Banka kayıtları", "Sözleşme", "Yazışmalar", "Her türlü delil"],
-        sonuc_istem: "Belirtilen itirazlarımızın kabulü ile takibin durdurulmasına/iptaline karar verilmesini saygıyla talep ederiz.",
-      };
-
-    case "delil_tanik":
-      return {
-        baslik,
-        taraflar,
-        konu: `Konu: ${konuSatiri} (Delil ve tanık bildirme)`,
-        aciklamalar: [
-          `Sayın Mahkeme'nizde görülmekte olan dosyada iddia/def'ilerimizin ispatı amacıyla delillerimiz ve tanıklarımız bildirilmiştir.`,
-          `Tanıklarımız; ${
-            Array.isArray(input.taniklar) ? input.taniklar.map((t: any) => asName(t)).join(", ") : "…"
-          } olup, her biri olayların gerçekleşme biçimini aydınlatacaktır.`,
-        ],
-        hukuki_sebepler: ["HMK", "İlgili mevzuat"],
-        deliller: ["Tanık beyanları", "Yazışmalar", "Fatura/irsaliye vb.", "Her türlü delil"],
-        sonuc_istem: "Bildirdiğimiz tanıkların davet edilerek dinlenmesine ve delillerimizin toplanmasına karar verilmesini saygıyla talep ederiz.",
-      };
-
-    case "kira_tahliye":
-      return {
-        baslik,
-        taraflar,
-        konu: `Konu: ${konuSatiri} (Kira ve tahliye talepleri)`,
-        aciklamalar: [
-          `${input.kiralananAdres || "Kiralanan taşınmaz"} adresindeki taşınmaz, ${asName(davaci)} tarafından ${asName(davali)}’ye kiralanmıştır.`,
-          `Kira bedelinin ödenmemesi / tahliye taahhütnamesi / sözleşmeye aykırılık nedeniyle tahliye talep ediyoruz.`,
-        ],
-        hukuki_sebepler: ["TBK", "İlgili mevzuat"],
-        deliller: ["Kira sözleşmesi", "Banka dekontları", "Tahliye taahhütnamesi", "Her türlü delil"],
-        sonuc_istem: "Kiralananın tahliyesine ve kira alacaklarımızın tahsiline karar verilmesini saygıyla talep ederiz.",
-      };
-
-    default:
-      return {
-        baslik,
-        taraflar,
-        konu: `Konu: ${konuSatiri}`,
-        aciklamalar: [
-          "Olayların özeti bu bölüme gelecektir.",
-          "Hukuki değerlendirme ve açıklamalar burada yer alacaktır."
-        ],
-        sonuc_istem: "Taleplerimizin kabulünü saygıyla arz ve talep ederiz."
-      };
+  let h = "";
+  if (baslik) h += `<h1>${baslik}</h1>`;
+  if (obj?.taraflar) {
+    const t = obj.taraflar;
+    if (t.basvuran) h += `<p><strong>Başvuran:</strong> ${t.basvuran}</p>`;
+    const k = Array.isArray(t.karsiTaraflar) ? t.karsiTaraflar.join(", ") : (t.karsiTaraflar || "");
+    if (k) h += `<p><strong>Karşı Taraf(lar):</strong> ${k}</p>`;
   }
-}
+  if (konu) h += `<p><strong>Konu:</strong> ${konu}</p>`;
 
-// ─────────────────────────────────────────────────────────────
-// /ai/start  → state=collecting
-// ─────────────────────────────────────────────────────────────
-app.post(
-  "/start",
-  asyncRoute(async (req, res) => {
-    const { purchaseId, category } = mustHave<{ purchaseId: string; category: string }>(req, [
-      "purchaseId",
-      "category",
-    ]);
-
-    await purchaseRef(purchaseId).set(
-      {
-        status: "pending",
-        meta: {
-          ai: {
-            state: "collecting",
-            category,
-            startedAt: ensureAdmin().FieldValue.serverTimestamp(),
-          },
-        },
-        updatedAt: ensureAdmin().FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    res.json({ ok: true });
-  })
-);
-
-// ─────────────────────────────────────────────────────────────
-// /ai/draft  → kategori + form cevapları → OpenAI (varsa) / Mock
-// ─────────────────────────────────────────────────────────────
-app.post(
-  "/draft",
-  asyncRoute(async (req, res) => {
-    const body = req.body ?? {};
-    const purchaseId = body.purchaseId as string;
-    const category = (body.category as Category) || (body.type as Category);
-    const input = (body.input as Record<string, any>) || {};
-    const reviewFeedback = (body.reviewFeedback as string) || null;
-
-    if (!purchaseId) throw new Error("Eksik alan: purchaseId");
-    if (!category) throw new Error("Eksik alan: category");
-
-    let sections: DraftSections;
-    const client = ensureOpenAI(OPENAI_API_KEY.value());
-
-    if (client) {
-      const system = `
-Sen bir hukuk katibisin. Yalnızca JSON döndür.
-Alanlar: 
-- baslik (string), 
-- taraflar (string, satır sonları için \\n kullan), 
-- konu (string), 
-- aciklamalar (string[]), 
-- hukuki_sebepler (string[], opsiyonel), 
-- deliller (string[], opsiyonel), 
-- sonuc_istem (string), 
-- ekler (string[], opsiyonel).
-Türkçe ve resmi üslup kullan. JSON dışına çıkma.`;
-
-      const userPayload = {
-        category,
-        input,
-        reviewFeedback,
-        note: "Sadece JSON nesnesi olarak yanıt ver.",
-      };
-
-      try {
-        const chat = await client.chat.completions.create({
-          model: "gpt-4o-mini",
-          temperature: 0.2,
-          response_format: { type: "json_object" },
-          messages: [
-            { role: "system", content: system },
-            { role: "user", content: JSON.stringify(userPayload) }
-          ],
-        });
-
-        const content = chat.choices?.[0]?.message?.content || "{}";
-        sections = JSON.parse(content) as DraftSections;
-
-        // zorunlu alanlar eksikse güvenli doldurma
-        if (!sections.baslik) {
-          sections.baslik = input.mahkeme || input.icraDairesi || input.arabuluculukBurosu || "İLGİLİ MERCİ";
-        }
-        if (!sections.konu) {
-          sections.konu = `Konu: ${input.konu || input.basvuruKonusu || input.talepKonu || "Dilekçe"}`;
-        }
-        if (!sections.taraflar) {
-          const davaci = input.davaci || input.basvuran || input.kirayaVeren || {};
-          const davali = input.davali || input.karsiTaraf || input.kiraci || {};
-          sections.taraflar = `Davacı/Başvuran: ${asName(davaci)}\nDavalı/Karşı Taraf: ${asName(davali)}`;
-        }
-        if (!sections.aciklamalar) sections.aciklamalar = [];
-        if (!sections.sonuc_istem) sections.sonuc_istem = "Taleplerimizin kabulünü talep ederiz.";
-      } catch (e) {
-        console.error("[OpenAI JSON parse/response error]", e);
-        sections = buildMockSections(category, input);
-      }
+  if (aciklamalar.length) h += `<ol>${aciklamalar.map((m)=>`<li>${m}</li>`).join("")}</ol>`;
+  if (hukuki.length) h += `<h2>Hukuki Sebepler</h2><ul>${hukuki.map((m)=>`<li>${m}</li>`).join("")}</ul>`;
+  if (deliller.length) h += `<h2>Deliller</h2><ul>${deliller.map((m)=>`<li>${m}</li>`).join("")}</ul>`;
+  if (sonuc) {
+    h += `<h2>Netice ve Talep</h2>`;
+    if (Array.isArray(sonuc)) {
+      h += `<ul>${sonuc.map((m)=>`<li>${m}</li>`).join("")}</ul>`;
     } else {
-      // Key yoksa mock
-      sections = buildMockSections(category, input);
+      h += `<p>${String(sonuc)}</p>`;
     }
-
-    // Firestore: state = in_progress + son taslak bilgileri
-    const ref = purchaseRef(purchaseId);
-    await ref.set(
-      {
-        meta: {
-          ai: {
-            state: "in_progress",
-            category,
-            lastDraftAt: ensureAdmin().FieldValue.serverTimestamp(),
-            lastInput: input,
-            lastReviewFeedback: reviewFeedback
-          }
-        },
-        updatedAt: ensureAdmin().FieldValue.serverTimestamp()
-      },
-      { merge: true }
-    );
-
-    res.json({ sections });
-  })
-);
-
-// ─────────────────────────────────────────────────────────────
-// /ai/render  → DOCX oluştur + Storage'a yükle + awaiting_review
-// ─────────────────────────────────────────────────────────────
-function draftToDoc(sections: DraftSections) {
-  const children: Paragraph[] = [];
-
-  // Başlık
-  if (sections.baslik) {
-    children.push(new Paragraph({ text: sections.baslik, heading: HeadingLevel.TITLE }));
   }
+  h += `<p>Tarih: GG/AA/YYYY – İmza</p>`;
+  return h;
+}
 
-  // Taraflar
-  if (sections.taraflar) {
-    children.push(
-      new Paragraph({ text: "" }),
-      new Paragraph({ text: "Taraflar", heading: HeadingLevel.HEADING_2 }),
-      ...sections.taraflar.split("\n").map((line) => new Paragraph(line))
-    );
-  }
+/* ========================== LLM: HTML Üretimi ========================= */
+async function llmHtmlBody(category: string, input_json: any): Promise<string> {
+  const openai = getOpenAI();
 
-  // Konu
-  if (sections.konu) {
-    children.push(
-      new Paragraph({ text: "" }),
-      new Paragraph({ text: "Konu", heading: HeadingLevel.HEADING_2 }),
-      new Paragraph(sections.konu)
-    );
-  }
+  const SYSTEM_PROMPT = `SEN KİMSİN
+- Türkiye’de pratik yapan kıdemli bir avukatsın.
+- Sana "kategori" ve normalize edilmiş "input_json" verileri gelecek (kullanıcı formu).
+- Görevin: Bu veriyi esas alarak TAM ve RESMÎ bir DİLEKÇE METNİ üretmek.
 
-  // Açıklamalar
-  if (sections.aciklamalar?.length) {
-    children.push(
-      new Paragraph({ text: "" }),
-      new Paragraph({ text: "Açıklamalar", heading: HeadingLevel.HEADING_2 }),
-      ...sections.aciklamalar.map((p) => new Paragraph(p))
-    );
-  }
+ÇIKTI BİÇİMİ (ÇOK ÖNEMLİ)
+- ÇIKTIN SADECE YALIN HTML GÖVDESİ olsun (UTF-8).
+- İzin verilen etiketler: <h1>, <h2>, <p>, <ul>, <ol>, <li>, <strong>, <em>, <br>, <table>, <thead>, <tbody>, <tr>, <th>, <td>.
+- <style>, <script>, <link>, kod bloğu ve Markdown YASAK.
+- Paragraflar için <p>; madde işaretleri için <ol>/<ul>-<li> kullan.
+- Uydurma bilgi ekleme. Eksikse ilgili alanı atla veya kısa tut.
 
-  // Hukuki Sebepler
-  if (sections.hukuki_sebepler?.length) {
-    children.push(
-      new Paragraph({ text: "" }),
-      new Paragraph({ text: "Hukuki Sebepler", heading: HeadingLevel.HEADING_2 }),
-      ...sections.hukuki_sebepler.map((p) => new Paragraph(p))
-    );
-  }
+GENEL ŞABLON
+- Üst başlık (h1): hitap makamı (mahkeme/büro).
+- (Varsa) DOSYA NO satırı (kısa <p>).
+- Taraf bilgileri (kısa <p> blokları).
+- Konu satırı: “Konu: …” (kısa <p>).
+- Açıklamalar: <ol> içinde kısa ve numaralı maddeler.
+- Hukuki Sebepler: <ul> içinde ilgili kanun atıfları (kısaltmalar).
+- Deliller: <ul> listesi (kısa).
+- Netice ve Talep: <p> içinde bir-iki cümle + istenen hususlar için <ul> veya <ol>.
+- Son satır: <p>“Tarih: GG/AA/YYYY – İmza</p>
 
-  // Deliller
-  if (sections.deliller?.length) {
-    children.push(
-      new Paragraph({ text: "" }),
-      new Paragraph({ text: "Deliller", heading: HeadingLevel.HEADING_2 }),
-      ...sections.deliller.map((p) => new Paragraph("• " + p))
-    );
-  }
+KATEGORİYE ÖZGÜ KURALLAR
+- "arabuluculuk":
+  - Başlık: “… ARABULUCULUK BÜROSUNA”
+  - Açıklamalar kısa ve maddeli olmalı.
+  - Hukuki atıf: 6325 sayılı HUAK.
+  - Taraflar: başvuran ve karşı taraf(lar) ayrı satırlarda.
+- "icra":
+  - Başlık: “… İCRA DAİRESİ MÜDÜRLÜĞÜNE”
+  - Konu: “… İcra Dairesi …/… sayılı dosyaya itiraz” (dosya noyu input_json’dan al).
+  - İtiraz türlerini açık söyle: borca/miktara/faize/yetkiye/imzaya (gelen verilere göre).
+  - Hukuki atıf: İİK.
+- "delil_tanik":
+  - Başlık: “… ASLİYE/SULH/İŞ … MAHKEMESİ’NE” (input_json mahkeme adını kullan)
+  - Tanıkları numaralandır; her tanık için adı ve “bilecekleri hususlar” kısa yaz.
+  - Hukuki atıf: HMK.
+- "kira_tahliye":
+  - Başlık: ilgili Sulh Hukuk Mahkemesi.
+  - Kira sözleşmesinin temel parametrelerini maddeler halinde yaz (adres, aylık kira, ödeme günü vs.).
+  - Varsa tahliye taahhüdü tarihini ayrıca belirt.
+  - Hukuki atıf: TBK.
 
-  // Sonuç ve İstem
-  if (sections.sonuc_istem) {
-    children.push(
-      new Paragraph({ text: "" }),
-      new Paragraph({ text: "Sonuç ve İstem", heading: HeadingLevel.HEADING_2 }),
-      new Paragraph(sections.sonuc_istem)
-    );
-  }
+ÜSLUP
+- Resmî Türkçe.
+- Kısa cümleler, net ve madde madde yapı.
+- Kişisel verileri input_json’daki gibi kullan (maskeleme yapma).
 
-  // Ekler
-  if (sections.ekler?.length) {
-    children.push(
-      new Paragraph({ text: "" }),
-      new Paragraph({ text: "Ekler", heading: HeadingLevel.HEADING_2 }),
-      ...sections.ekler.map((p) => new Paragraph("• " + p))
-    );
-  }
+TARİH BİÇİMİ
+- GG/AA/YYYY.
 
-  const doc = new Document({
-    sections: [{ properties: {}, children }],
+Doğrulama/Temizlik
+- Sadece izin verilen etiketleri kullan (başka etiket üretme).
+- Boş alanlar geldiyse o bölümü kısa tut veya atla.
+- JSON, Markdown, açıklama döndürme; SADECE HTML gövde döndür.`;
+
+  const userMsg = `User:
+category: ${category}
+input_json:
+${JSON.stringify(input_json, null, 2)}`;
+
+  // OpenAI Responses API — düz metin bekliyoruz
+  const r = await openai.responses.create({
+    model: OPENAI_MODEL,
+    input: userMsg,
+    instructions: SYSTEM_PROMPT,
   });
 
-  return Packer.toBuffer(doc);
+  // metni çıkar
+  const text =
+    (r as any)?.output_text ??
+    ((r as any)?.output || [])
+      .map((it: any) => (it?.content || []).map((c: any) => c?.text?.value || "").join(""))
+      .join("");
+
+  let html = (text || "").trim();
+
+  // Model eski alışkanlıkla JSON döndürürse → HTML’e çevir
+  if (/^\s*[\{\[]/.test(html)) {
+    const parsed = tryParseJson<any>(html);
+    if (parsed) html = jsonDraftToHtml(parsed);
+  }
+
+  html = sanitizeAllowedTags(html).trim();
+  if (!html) {
+    html = `<h1>… MAKAMINA</h1><p>Konu: …</p><ol><li>…</li></ol><h2>Hukuki Sebepler</h2><ul><li>…</li></ul><h2>Deliller</h2><ul><li>…</li></ul><h2>Netice ve Talep</h2><p>…</p><p>Tarih: GG/AA/YYYY – İmza</p>`;
+  }
+  return html;
 }
 
-app.post(
-  "/render",
-  asyncRoute(async (req, res) => {
-    const { purchaseId, sections } = mustHave<{ purchaseId: string; sections: DraftSections }>(req, [
-      "purchaseId",
-      "sections",
-    ]);
+/* ============================== HTML → DOCX ============================== */
+async function htmlToDocxBuffer(html: string): Promise<Buffer> {
+  const mod = await import("html-to-docx");
+  const HTMLtoDOCX = (mod as any).default || (mod as any);
+  const buf: Uint8Array = await HTMLtoDOCX(
+    `<html><head><meta charset="utf-8"></head><body>${html}</body></html>`,
+    null,
+    { table: { row: { cantSplit: true } } }
+  );
+  return Buffer.from(buf);
+}
 
-    // 1) DOCX oluştur
-    const buffer = await draftToDoc(sections);
+/* ============================== HTML → PDF =============================== */
+async function htmlToPdfBuffer(html: string): Promise<Buffer> {
+  const puppeteer = await (async () => {
+    try { return (await import("puppeteer")).default; } catch { return null; }
+  })();
+  if (!puppeteer) throw new Error("PDF motoru yok (puppeteer kurulu değil)");
+  const browser = await puppeteer.launch({ args: ["--no-sandbox","--disable-setuid-sandbox"] });
+  const page = await browser.newPage();
+  await page.setContent(`<html><head><meta charset='utf-8'></head><body>${html}</body></html>`, { waitUntil: "networkidle0" });
+  const pdf = await page.pdf({
+    format: "A4",
+    printBackground: true,
+    margin: { top: "20mm", bottom: "20mm", left: "18mm", right: "18mm" }
+  });
+  await browser.close();
+  return Buffer.from(pdf);
+}
 
-    // 2) Storage'a yükle (Firebase download token ile)
-    const storage = getStorage();
-    const bucket = storage.bucket(process.env.STORAGE_BUCKET || undefined);
-    const path = `purchases/${purchaseId}/ai/AI_Draft_${Date.now()}.docx`;
-    const file = bucket.file(path);
+/* ============================== Storage Upload =========================== */
+async function uploadBufferGetDownloadURL(
+  buf: Buffer,
+  contentType: string,
+  objectPath: string
+): Promise<string> {
+  const file = bucket.file(objectPath);
+  await file.save(buf, { contentType, resumable: false, metadata: { cacheControl: "public, max-age=31536000" } });
+  // Public yapmak istemiyorsan makePublic kısmını kaldır veya imzalı URL üret.
+  await file.makePublic().catch(() => {});
+  return `https://storage.googleapis.com/${bucket.name}/${encodeURIComponent(objectPath)}`;
+}
 
-    const token = randomUUID();
+/* ================================= Routes ================================ */
 
-    await file.save(buffer, {
-      resumable: false,
-      metadata: {
-        contentType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        metadata: { firebaseStorageDownloadTokens: token }
-      }
-    });
+// POST /ai/start
+app.post("/start", async (req, res) => {
+  try {
+    const { purchaseId, category } = req.body || {};
+    if (!purchaseId || !category) return res.status(400).json({ error: "purchaseId ve category zorunlu" });
 
-    // Firebase download URL (imzalı URL yerine)
-    const downloadUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(
-      path
-    )}?alt=media&token=${token}`;
+    await db.collection("purchases").doc(String(purchaseId)).set({
+      meta: { ai: { state: "started", category, version: 0 } },
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
 
-    // 3) Firestore güncelle
-    const ref = purchaseRef(purchaseId);
-    await ref.set(
-      {
-        status: "in_progress",
-        meta: {
-          ai: {
-            state: "awaiting_review",
-            draftDocxUrl: downloadUrl,
-            lastRenderAt: ensureAdmin().FieldValue.serverTimestamp(),
-            firstSuccessAt: ensureAdmin().FieldValue.serverTimestamp(),
-          },
-        },
-        updatedAt: ensureAdmin().FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-
-    res.json({ docxUrl: downloadUrl });
-  })
-);
-// ─────────────────────────────────────────────────────────────
-// Error handler
-// ─────────────────────────────────────────────────────────────
-app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-  const msg = err?.message || "İşlem başarısız";
-  console.error("[/ai ERROR]", msg, err?.stack || err);
-  res.status(400).json({ error: msg });
+    return res.status(200).json({ ok: true });
+  } catch (e: any) {
+    logger.error("/ai/start error:", e);
+    return res.status(500).json({ error: e?.message || "Başlatılamadı" });
+  }
 });
 
-// ─────────────────────────────────────────────────────────────
-// CORS (onRequest seviyesinde kesin)
-// ─────────────────────────────────────────────────────────────
-const ALLOWED = new Set([
-  "http://localhost:3000",
-  process.env.SITE_ORIGIN || "" // prod domainini .env/.secrets'te ayarlayabilirsin
-]);
+// POST /ai/draft  → LLM’den HTML üret ve sakla
+// body: { purchaseId: string, category: string, input: any }
+app.post("/draft", async (req, res) => {
+  try {
+    const { purchaseId, category, input } = req.body || {};
+    if (!purchaseId || !category) return res.status(400).json({ error: "purchaseId ve category zorunlu" });
 
-function setCors(res: Response, origin?: string) {
-  const allow = origin && ALLOWED.has(origin) ? origin : "http://localhost:3000";
-  res.setHeader("Access-Control-Allow-Origin", allow);
-  res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
-  res.setHeader("Access-Control-Max-Age", "86400");
-}
+    const html = await llmHtmlBody(String(category), input);
 
-// ─────────────────────────────────────────────────────────────
-// Export (Functions v2 onRequest + secrets)
-// ─────────────────────────────────────────────────────────────
-export const ai = onRequest(
-  { region: "europe-west1", cors: true, secrets: [FIREBASE_ADMIN_JSON_B64, OPENAI_API_KEY] },
-  (req, res) => {
-    // Secrets hazırla
-    ensureAdmin(FIREBASE_ADMIN_JSON_B64.value());
-    ensureOpenAI(OPENAI_API_KEY.value());
+    const pRef = db.collection("purchases").doc(String(purchaseId));
+    const snap = await pRef.get();
+    const curVer = Number(snap.data()?.meta?.ai?.version || 0);
+    const nextVer = curVer + 1;
 
-    // CORS
-    setCors(res as any, req.headers.origin as string | undefined);
-    if (req.method === "OPTIONS") return res.status(204).send("");
+    await pRef.set({
+      meta: { ai: { state: "drafted", category, version: nextVer, lastHtml: html } },
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
 
-    return app(req as any, res as any);
+    return res.status(200).json({ html, version: nextVer });
+  } catch (e: any) {
+    logger.error("/ai/draft error:", e);
+    return res.status(500).json({ error: e?.message || "Önizleme oluşturulamadı" });
   }
-);
+});
+
+// POST /ai/render → HTML’den DOCX (default) / PDF
+// body: { purchaseId: string, html?: string, format?: 'docx' | 'pdf' }
+app.post("/render", async (req, res) => {
+  try {
+    const { purchaseId, html: htmlBody, format = "docx" } = req.body || {};
+    if (!purchaseId) return res.status(400).json({ error: "purchaseId zorunlu" });
+
+    const pRef = db.collection("purchases").doc(String(purchaseId));
+    const snap = await pRef.get();
+    if (!snap.exists) return res.status(404).json({ error: "Satın alma bulunamadı" });
+    const data: any = snap.data();
+    const category = data?.meta?.ai?.category || "arabuluculuk";
+    const version = Number(data?.meta?.ai?.version || 1);
+
+    const html = (typeof htmlBody === "string" && htmlBody.trim())
+      ? sanitizeAllowedTags(htmlBody)
+      : (data?.meta?.ai?.lastHtml || "");
+    if (!html) return res.status(400).json({ error: "Önce önizleme (HTML) gerekli" });
+
+    let url = "";
+    if (format === "pdf") {
+      const pdfBuf = await htmlToPdfBuffer(html);
+      const objectPath = `ai/petitions/${purchaseId}/draft_v${version}.pdf`;
+      url = await uploadBufferGetDownloadURL(pdfBuf, "application/pdf", objectPath);
+      await pRef.set({
+        meta: { ai: { state: "awaiting_review", category, version, draftPdfUrl: url, firstSuccessAt: admin.firestore.FieldValue.serverTimestamp() } },
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    } else {
+      const docxBuf = await htmlToDocxBuffer(html);
+      const objectPath = `ai/petitions/${purchaseId}/draft_v${version}.docx`;
+      url = await uploadBufferGetDownloadURL(
+        docxBuf,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        objectPath
+      );
+      await pRef.set({
+        meta: { ai: { state: "awaiting_review", category, version, draftDocxUrl: url, firstSuccessAt: admin.firestore.FieldValue.serverTimestamp() } },
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
+    }
+
+    return res.status(200).json({ ok: true, url, format });
+  } catch (e: any) {
+    logger.error("/ai/render error:", e);
+    return res.status(500).json({ error: e?.message || "Dilekçe oluşturulamadı" });
+  }
+});
+
+/* ============================== Cloud Function ============================== */
+export const ai = onRequest({ region: REGION, timeoutSeconds: 120 }, app as any);
