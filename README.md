@@ -98,7 +98,6 @@ Payments:
 ## Screenshots
 
 <img width="3815" height="1921" alt="Ekran görüntüsü 2026-06-11 203822" src="https://github.com/user-attachments/assets/2d6a137b-53fc-49f2-8d64-f797c8ea3b1f" />
-<img width="3815" height="1921" alt="Ekran görüntüsü 2026-06-11 203822" src="https://github.com/user-attachments/assets/b15f7918-5135-4b33-afbc-3f970dca9629" />
 <img width="3813" height="1909" alt="Ekran görüntüsü 2026-06-11 203341" src="https://github.com/user-attachments/assets/e7cbec21-db34-437f-b124-e19a5f3d5bbf" />
 
 <img width="3812" height="1889" alt="Ekran görüntüsü 2026-06-11 203956" src="https://github.com/user-attachments/assets/e8eb0b0a-8614-4954-82ac-dea7def48bf0" />
