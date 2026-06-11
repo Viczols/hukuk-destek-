@@ -1,36 +1,104 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app).
+# Hukuk Destek
 
-## Getting Started
+AI-assisted legal support platform for petition generation and online legal consultation.
 
-First, run the development server:
+## Overview
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+Hukuk Destek is a web platform designed to simplify access to legal assistance. Users can generate petitions with AI support, request expert-reviewed petitions, communicate with legal professionals, and manage their legal requests through a modern web interface.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Features
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+### AI-Assisted Petition Writing
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+* Guided petition generation
+* Structured legal document creation
+* PDF export support
+* User-friendly workflow
 
-## Learn More
+### Expert Petition Service
 
-To learn more about Next.js, take a look at the following resources:
+* Lawyer-assisted petition preparation
+* Order management system
+* Status tracking
+* Secure document delivery
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Online Consultation
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+* Real-time chat system
+* Lawyer assignment workflow
+* Purchase-based support tickets
+* Conversation history
 
-## Deploy on Vercel
+### Payment Infrastructure
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+* İyzico integration
+* Secure checkout flow
+* Purchase history management
+* Order tracking
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Blog System
+
+* Legal articles and guides
+* Draft and publish workflow
+* Cover image management
+* SEO-friendly blog structure
+
+### User Management
+
+* Firebase Authentication
+* Role-based authorization
+* Lawyer and client accounts
+* Protected routes
+
+## Technologies
+
+Frontend:
+
+* Next.js
+* TypeScript
+* React
+
+Backend:
+
+* Firebase Cloud Functions
+* Express
+
+Database:
+
+* Firestore
+* Realtime Database
+
+Storage:
+
+* Firebase Storage
+
+Authentication:
+
+* Firebase Auth
+
+Payments:
+
+* İyzico
+
+## Key Highlights
+
+* AI-powered legal document generation
+* Real-time lawyer-client communication
+* Secure payment processing
+* Cloud-based infrastructure
+* Modern responsive interface
+
+## Future Plans
+
+* Mobile application
+* Voice consultation
+* Advanced AI legal assistance
+* Appointment scheduling system
+
+## Screenshots
+
+Screenshots will be added soon.
+
+## License
+
+This project was developed for educational and portfolio purposes.
